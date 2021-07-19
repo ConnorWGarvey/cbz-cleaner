@@ -1,0 +1,58 @@
+#!/usr/bin/env groovy
+
+import java.nio.file.Files
+import java.nio.file.FileSystems
+import java.nio.file.Path
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
+
+class Packager {
+  boolean allFilesAreInOneDirectory(Path path) {
+    return new ZipFile(path.toFile()).withCloseable { zip ->
+      def entries = zip.entries()
+      def directoryEntry = entries.hasMoreElements() ? entries.nextElement() : null
+      if (!directoryEntry?.isDirectory()) return false
+      while(entries.hasMoreElements()) {
+        def entry = entries.nextElement()
+        if (entry.isDirectory()) return false
+        if (!entry.name.startsWith(directoryEntry.name)) return false
+      }
+      return true
+    }
+  }
+
+  void repackage(Path file) {
+    assert Files.isRegularFile(file)
+    new ZipFile(file.toFile()).withCloseable { zipIn ->
+      def fileName = file.name[file.name.lastIndexOf('/')+1..file.name.lastIndexOf('.')]
+      def fileExtension = file.name[file.name.lastIndexOf('.')+1..-1]
+      new ZipOutputStream(Files.newOutputStream(file.parent.resolve("$fileName-cleaned.$fileExtension"))) {
+            Enumeration<? extends ZipEntry> entries = srcFile.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry src = entries.nextElement();
+                ZipEntry dest = new ZipEntry(src.getName());
+                destFile.putNextEntry(dest);
+                try (InputStream content = srcFile.getInputStream(src)) {
+                    content.transferTo(destFile);
+                }
+                destFile.closeEntry();
+            }
+            destFile.finish();
+        }
+    }
+  }
+
+  void repackageAll(Path directory) {
+    assert Files.isDirectory(directory)
+    directory.eachFile { file ->
+      if (allFilesAreInOneDirectory(file)) {
+        println "${file.fileName} ****** yes"
+        repackage(file)
+      }
+    }
+  }
+}
+
+new Packager().repackageAll(FileSystems.getDefault().getPath('.'))
+
