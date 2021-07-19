@@ -1,8 +1,13 @@
 #!/usr/bin/env groovy
 
+import java.nio.file.StandardCopyOption
 import java.nio.file.Files
 import java.nio.file.FileSystems
+import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.attribute.GroupPrincipal
+import java.nio.file.attribute.PosixFileAttributes
+import java.nio.file.attribute.PosixFileAttributeView
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -24,30 +29,37 @@ class Packager {
 
   void repackage(Path file) {
     assert Files.isRegularFile(file)
+    def fullFileName = file.fileName.toString()
+    def fileName = fullFileName[fullFileName.lastIndexOf('/')+1..fullFileName.lastIndexOf('.')-1]
+    def fileExtension = fullFileName[fullFileName.lastIndexOf('.')+1..-1]
+    def fileTemp = file.parent.resolve("$fileName-cleaned.$fileExtension")
     new ZipFile(file.toFile()).withCloseable { zipIn ->
-      def fileName = file.name[file.name.lastIndexOf('/')+1..file.name.lastIndexOf('.')]
-      def fileExtension = file.name[file.name.lastIndexOf('.')+1..-1]
-      new ZipOutputStream(Files.newOutputStream(file.parent.resolve("$fileName-cleaned.$fileExtension"))) {
-            Enumeration<? extends ZipEntry> entries = srcFile.entries();
-            while (entries.hasMoreElements()) {
-                ZipEntry src = entries.nextElement();
-                ZipEntry dest = new ZipEntry(src.getName());
-                destFile.putNextEntry(dest);
-                try (InputStream content = srcFile.getInputStream(src)) {
-                    content.transferTo(destFile);
-                }
-                destFile.closeEntry();
-            }
-            destFile.finish();
+      new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
+        def entries = zipIn.entries()
+        def directoryEntry = entries.nextElement()
+        assert directoryEntry.isDirectory()
+        while (entries.hasMoreElements()) {
+          def entryIn = entries.nextElement()
+          def entryOut = new ZipEntry(entryIn.name[entryIn.name.lastIndexOf('/')+1..-1])
+          zipOut.putNextEntry(entryOut);
+          zipIn.getInputStream(entryIn).withCloseable { content ->
+            content.transferTo(zipOut)
+          }
+          zipOut.closeEntry()
         }
+        zipOut.finish()
+      }
     }
+    GroupPrincipal group = Files.readAttributes(file.parent, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
+    Files.getFileAttributeView(fileTemp, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
+    Files.setOwner(fileTemp, Files.getOwner(file.parent))
+    Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
   }
 
   void repackageAll(Path directory) {
     assert Files.isDirectory(directory)
     directory.eachFile { file ->
       if (allFilesAreInOneDirectory(file)) {
-        println "${file.fileName} ****** yes"
         repackage(file)
       }
     }
