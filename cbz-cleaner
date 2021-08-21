@@ -13,8 +13,35 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 class Packager {
+  void eachZipEntryIndexed(Path path, Closure closure) {
+    everyZipEntryIndexed(path) { entry, size, index ->
+      closure.call(entry, size, index)
+      return true
+    }
+  }
+
+  boolean everyZipEntry(Path path, Closure closure) {
+    everyZipEntryIndexed(path) { entry, size, index ->
+      closure.call(entry)
+    }
+  }
+
+  boolean everyZipEntryIndexed(Path path, Closure closure) {
+    new ZipFile(path.toFile()).withCloseable { zip ->
+      def entries = zip.entries().toList().toSorted{it.name}
+      def size = zip.size()
+      def index = 0
+      for (entry in entries) {
+        if (!closure.call(entry, size, index++)) {
+          return false
+        }
+      }
+      true
+    }
+  }
+
   boolean allFilesAreInOneDirectory(Path path) {
-    return new ZipFile(path.toFile()).withCloseable { zip ->
+    new ZipFile(path.toFile()).withCloseable { zip ->
       def entries = zip.entries()
       def directoryEntry = entries.hasMoreElements() ? entries.nextElement() : null
       if (!directoryEntry?.isDirectory()) return false
@@ -23,11 +50,29 @@ class Packager {
         if (entry.isDirectory()) return false
         if (!entry.name.startsWith(directoryEntry.name)) return false
       }
-      return true
+      true
     }
   }
 
-  void repackage(Path file) {
+  boolean filesAreCorrectlyNumbered(Path path) {
+    // Every file name is a number
+    return everyZipEntry(path) { entry ->
+      if (entry.isDirectory()) {
+        return false
+      }
+      def fullName = entry.name.toString()
+      def name = fullName[0..fullName.lastIndexOf('.')-1]
+      name.isInteger()
+    } && everyZipEntryIndexed(path) { entry, size, index ->
+      // File names are sequential
+      def fullName = entry.name.toString()
+      def name = fullName[0..fullName.lastIndexOf('.')-1]
+      def expectedName = String.format("%0${size.toString().length()}d", index+1)
+      name == expectedName
+    }
+  }
+
+  void moveFilesOutOfDirectory(Path file) {
     assert Files.isRegularFile(file)
     def fullFileName = file.fileName.toString()
     def fileName = fullFileName[fullFileName.lastIndexOf('/')+1..fullFileName.lastIndexOf('.')-1]
@@ -41,7 +86,7 @@ class Packager {
         while (entries.hasMoreElements()) {
           def entryIn = entries.nextElement()
           def entryOut = new ZipEntry(entryIn.name[entryIn.name.lastIndexOf('/')+1..-1])
-          zipOut.putNextEntry(entryOut);
+          zipOut.putNextEntry(entryOut)
           zipIn.getInputStream(entryIn).withCloseable { content ->
             content.transferTo(zipOut)
           }
@@ -52,15 +97,52 @@ class Packager {
     }
     GroupPrincipal group = Files.readAttributes(file.parent, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
     Files.getFileAttributeView(fileTemp, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
-    Files.setOwner(fileTemp, Files.getOwner(file.parent))
+    //Files.setOwner(fileTemp, Files.getOwner(file.parent))
+    Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
+  }
+
+  void renumberFiles(Path file) {
+    assert Files.isRegularFile(file)
+    def fullFileName = file.fileName.toString()
+    def fileName = fullFileName[fullFileName.lastIndexOf('/')+1..fullFileName.lastIndexOf('.')-1]
+    def fileExtension = fullFileName[fullFileName.lastIndexOf('.')+1..-1]
+    def fileTemp = file.parent.resolve("$fileName-renumbered.$fileExtension")
+    new ZipFile(file.toFile()).withCloseable { zipIn ->
+      new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
+        def index = 0
+        zipIn.stream().sorted(Comparator.comparing(ZipEntry::getName)).each { entryIn ->
+          def oldName = entryIn.name
+          def extension = oldName[oldName.lastIndexOf('.')+1..-1]
+          def number = String.format("%0${zipIn.size().toString().length()}d", index+1)
+          def entryOut = new ZipEntry("${number}.$extension")
+          zipOut.putNextEntry(entryOut)
+          zipIn.getInputStream(entryIn).withCloseable { content ->
+            content.transferTo(zipOut)
+          }
+          zipOut.closeEntry()
+          ++index
+        }
+        zipOut.finish()
+      }
+    }
+    GroupPrincipal group = Files.readAttributes(file.parent, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
+    Files.getFileAttributeView(fileTemp, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
+    //Files.setOwner(fileTemp, Files.getOwner(file.parent))
     Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
   }
 
   void repackageAll(Path directory) {
     assert Files.isDirectory(directory)
     directory.eachFile { file ->
+      println file.fileName
+      if (Files.isDirectory(file)) return
       if (allFilesAreInOneDirectory(file)) {
-        repackage(file)
+        println '  Moving files out of directory'
+        moveFilesOutOfDirectory(file)
+      }
+      if (!filesAreCorrectlyNumbered(file)) {
+        println '  Renumbering'
+        renumberFiles(file)
       }
     }
   }
