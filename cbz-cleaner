@@ -12,7 +12,40 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
+  
+   
 class Packager {
+  static GARBAGE_DIRECTORIES = ['__MACOSX/'].toSet()
+  static ARCHIVE_EXTENSIONS = ['cbz', 'zip'].toSet()
+
+  boolean allFilesAreInOneDirectory(Path path) {
+    new ZipFile(path.toFile()).withCloseable { zip ->
+      def entries = zip.entries()
+      def directoryEntry = entries.hasMoreElements() ? entries.nextElement() : null
+      if (!directoryEntry?.isDirectory()) return false
+      while(entries.hasMoreElements()) {
+        def entry = entries.nextElement()
+        if (entry.isDirectory()) return false
+        if (!entry.name.startsWith(directoryEntry.name)) return false
+      }
+      true
+    }
+  }
+
+  boolean anyZipEntry(Path path, Closure closure) {
+    new ZipFile(path.toFile()).withCloseable { zip ->
+      def entries = zip.entries().toList().toSorted{it.name}
+      def size = zip.size()
+      def index = 0
+      for (entry in entries) {
+        if (closure.call(entry)) {
+          return true
+        }
+      }
+      false
+    }
+  }
+
   void eachZipEntryIndexed(Path path, Closure closure) {
     everyZipEntryIndexed(path) { entry, size, index ->
       closure.call(entry, size, index)
@@ -40,20 +73,6 @@ class Packager {
     }
   }
 
-  boolean allFilesAreInOneDirectory(Path path) {
-    new ZipFile(path.toFile()).withCloseable { zip ->
-      def entries = zip.entries()
-      def directoryEntry = entries.hasMoreElements() ? entries.nextElement() : null
-      if (!directoryEntry?.isDirectory()) return false
-      while(entries.hasMoreElements()) {
-        def entry = entries.nextElement()
-        if (entry.isDirectory()) return false
-        if (!entry.name.startsWith(directoryEntry.name)) return false
-      }
-      true
-    }
-  }
-
   boolean filesAreCorrectlyNumbered(Path path) {
     // Every file name is a number
     return everyZipEntry(path) { entry ->
@@ -69,6 +88,23 @@ class Packager {
       def name = fullName[0..fullName.lastIndexOf('.')-1]
       def expectedName = String.format("%0${size.toString().length()}d", index+1)
       name == expectedName
+    }
+  }
+
+  String fileName(ZipEntry entry) {
+    def name = entry.name
+    if (name.contains('/')) name[name.lastIndexOf('/')+1..-1]
+    else name
+  }
+
+  String fileNameWithoutExtension(ZipEntry entry) {
+    def name = fileName(entry)
+    name[0..name.lastIndexOf('.')-1]
+  }
+
+  boolean hasGarbage(Path path) {
+    anyZipEntry(path) { entry ->
+      entry.isDirectory() && entry.name.toString() in GARBAGE_DIRECTORIES
     }
   }
 
@@ -101,6 +137,34 @@ class Packager {
     Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
   }
 
+  void removeGarbage(Path file) {
+    assert Files.isRegularFile(file)
+    def fullFileName = file.fileName.toString()
+    def fileName = fullFileName[fullFileName.lastIndexOf('/')+1..fullFileName.lastIndexOf('.')-1]
+    def fileExtension = fullFileName[fullFileName.lastIndexOf('.')+1..-1]
+    def fileTemp = file.parent.resolve("$fileName-withoutgarbage.$fileExtension")
+    new ZipFile(file.toFile()).withCloseable { zipIn ->
+      new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
+        def entries = zipIn.entries().toList().toSorted{it.name}
+        for (entryIn in entries) {
+          if (!GARBAGE_DIRECTORIES.any{entryIn.name.toString().startsWith(it)}) {
+            def entryOut = new ZipEntry(entryIn.name)
+            zipOut.putNextEntry(entryOut)
+            zipIn.getInputStream(entryIn).withCloseable { content ->
+              content.transferTo(zipOut)
+            }
+          }
+         zipOut.closeEntry()
+        }
+        zipOut.finish()
+      }
+    }
+    GroupPrincipal group = Files.readAttributes(file.parent, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
+    Files.getFileAttributeView(fileTemp, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
+    //Files.setOwner(fileTemp, Files.getOwner(file.parent))
+    Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
+  }
+
   void renumberFiles(Path file) {
     assert Files.isRegularFile(file)
     def fullFileName = file.fileName.toString()
@@ -110,7 +174,8 @@ class Packager {
     new ZipFile(file.toFile()).withCloseable { zipIn ->
       new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
         def index = 0
-        zipIn.stream().sorted(Comparator.comparing(ZipEntry::getName)).each { entryIn ->
+        def entries = sortedEntries(zipIn.entries())
+        entries.each { entryIn ->
           def oldName = entryIn.name
           def extension = oldName[oldName.lastIndexOf('.')+1..-1]
           def number = String.format("%0${zipIn.size().toString().length()}d", index+1)
@@ -134,8 +199,17 @@ class Packager {
   void repackageAll(Path directory) {
     assert Files.isDirectory(directory)
     directory.eachFile { file ->
-      println file.fileName
+      def fileName = file.fileName.toString()
+      def extension = fileName[fileName.lastIndexOf('.')+1..-1]
+      if (!(extension in ARCHIVE_EXTENSIONS)) {
+        return
+      }
+      println fileName
       if (Files.isDirectory(file)) return
+      if (hasGarbage(file)) {
+        println '  Cleaning garbage'
+        removeGarbage(file)
+      }
       if (allFilesAreInOneDirectory(file)) {
         println '  Moving files out of directory'
         moveFilesOutOfDirectory(file)
@@ -144,6 +218,20 @@ class Packager {
         println '  Renumbering'
         renumberFiles(file)
       }
+    }
+  }
+
+  List<? extends ZipEntry> sortedEntries(Enumeration<? extends ZipEntry> enumeration) {
+    def entries = enumeration.toList()
+    // Every file evds with a dash or underscore, then a number
+    if (entries.every{fileNameWithoutExtension(it) ==~ /.*[_\-]\d+/}) {
+      entries.toSorted { entry ->
+        def name = fileNameWithoutExtension(entry)
+        def number = (name =~ /\d+$/)[0]
+        number.toBigInteger()
+      }
+    } else {
+      entries.toSorted{it.name}
     }
   }
 }
