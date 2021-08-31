@@ -247,10 +247,10 @@ class Packager {
   List<? extends ZipEntry> sortedEntries(Enumeration<? extends ZipEntry> enumeration) {
     def entries = enumeration.toList()
     // Every file evds with a dash or underscore, then a number
-    if (entries.every{!it.isDirectory()} && entries.every{fileNameWithoutExtension(it) ==~ /.*[_\-]\d+/}) {
+    if (entries.every{!it.isDirectory()} && entries.every{fileNameWithoutExtension(it) ==~ /.*[_\-\#]\d+/}) {
       entries.
         // Group by prefix
-        groupBy{(fileNameWithoutExtension(it) =~ /(.*)[_\-]\d+$/)[0][1]}.
+        groupBy{(fileNameWithoutExtension(it) =~ /(.*)[_\-\#]\d+$/)[0][1]}.
         // Sort each group by postfix
         collectEntries { prefix, groupedEntries ->
           [prefix, groupedEntries.toSorted { entry ->
