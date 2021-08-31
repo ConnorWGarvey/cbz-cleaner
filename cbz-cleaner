@@ -16,6 +16,7 @@ import java.util.zip.ZipOutputStream
    
 class Packager {
   static GARBAGE_DIRECTORIES = ['__MACOSX/'].toSet()
+  static GARBAGE_FILES = ['.DS_Store'].toSet()
   static ARCHIVE_EXTENSIONS = ['cbz', 'zip'].toSet()
 
   boolean allFilesAreInOneDirectory(Path path) {
@@ -34,7 +35,7 @@ class Packager {
 
   boolean anyZipEntry(Path path, Closure closure) {
     new ZipFile(path.toFile()).withCloseable { zip ->
-      def entries = zip.entries().toList().toSorted{it.name}
+      def entries = sortedEntries(zip.entries())
       def size = zip.size()
       def index = 0
       for (entry in entries) {
@@ -54,14 +55,12 @@ class Packager {
   }
 
   boolean everyZipEntry(Path path, Closure closure) {
-    everyZipEntryIndexed(path) { entry, size, index ->
-      closure.call(entry)
-    }
+    everyZipEntryIndexed(path) { entry, size, index -> closure.call(entry) }
   }
 
   boolean everyZipEntryIndexed(Path path, Closure closure) {
     new ZipFile(path.toFile()).withCloseable { zip ->
-      def entries = zip.entries().toList().toSorted{it.name}
+      def entries = sortedEntries(zip.entries())
       def size = zip.size()
       def index = 0
       for (entry in entries) {
@@ -73,21 +72,11 @@ class Packager {
     }
   }
 
+  /** File names are sequential numbers */
   boolean filesAreCorrectlyNumbered(Path path) {
-    // Every file name is a number
-    return everyZipEntry(path) { entry ->
-      if (entry.isDirectory()) {
-        return false
-      }
-      def fullName = entry.name.toString()
-      def name = fullName[0..fullName.lastIndexOf('.')-1]
-      name.isInteger()
-    } && everyZipEntryIndexed(path) { entry, size, index ->
-      // File names are sequential
-      def fullName = entry.name.toString()
-      def name = fullName[0..fullName.lastIndexOf('.')-1]
+    everyZipEntryIndexed(path) { entry, size, index ->
       def expectedName = String.format("%0${size.toString().length()}d", index+1)
-      name == expectedName
+      fileNameWithoutExtension(entry) == expectedName
     }
   }
 
@@ -102,18 +91,26 @@ class Packager {
     name[0..name.lastIndexOf('.')-1]
   }
 
-  boolean hasGarbage(Path path) {
+  boolean hasGarbageDirectories(Path path) {
     anyZipEntry(path) { entry ->
       entry.isDirectory() && entry.name.toString() in GARBAGE_DIRECTORIES
     }
   }
 
-  void moveFilesOutOfDirectory(Path file) {
-    assert Files.isRegularFile(file)
+  boolean hasGarbageFiles(Path path) {
+    anyZipEntry(path) { fileName(it) in GARBAGE_FILES }
+  }
+
+  Path makeTempPath(Path file, String tag) {
     def fullFileName = file.fileName.toString()
     def fileName = fullFileName[fullFileName.lastIndexOf('/')+1..fullFileName.lastIndexOf('.')-1]
     def fileExtension = fullFileName[fullFileName.lastIndexOf('.')+1..-1]
-    def fileTemp = file.parent.resolve("$fileName-cleaned.$fileExtension")
+    file.parent.resolve("$fileName-${tag}.$fileExtension")
+  }
+ 
+  void moveFilesOutOfDirectory(Path file) {
+    assert Files.isRegularFile(file)
+    def fileTemp = makeTempPath(file, 'nodirectory')
     new ZipFile(file.toFile()).withCloseable { zipIn ->
       new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
         def entries = zipIn.entries()
@@ -137,12 +134,9 @@ class Packager {
     Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
   }
 
-  void removeGarbage(Path file) {
+  void removeGarbageDirectories(Path file) {
     assert Files.isRegularFile(file)
-    def fullFileName = file.fileName.toString()
-    def fileName = fullFileName[fullFileName.lastIndexOf('/')+1..fullFileName.lastIndexOf('.')-1]
-    def fileExtension = fullFileName[fullFileName.lastIndexOf('.')+1..-1]
-    def fileTemp = file.parent.resolve("$fileName-withoutgarbage.$fileExtension")
+    def fileTemp = makeTempPath(file, 'withoutgarbagedirectories')
     new ZipFile(file.toFile()).withCloseable { zipIn ->
       new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
         def entries = zipIn.entries().toList().toSorted{it.name}
@@ -165,12 +159,37 @@ class Packager {
     Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
   }
 
-  void renumberFiles(Path file) {
+  void removeGarbageFiles(Path file) {
     assert Files.isRegularFile(file)
     def fullFileName = file.fileName.toString()
     def fileName = fullFileName[fullFileName.lastIndexOf('/')+1..fullFileName.lastIndexOf('.')-1]
     def fileExtension = fullFileName[fullFileName.lastIndexOf('.')+1..-1]
-    def fileTemp = file.parent.resolve("$fileName-renumbered.$fileExtension")
+    def fileTemp = file.parent.resolve("$fileName-withoutgarbagefiles.$fileExtension")
+    new ZipFile(file.toFile()).withCloseable { zipIn ->
+      new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
+        def entries = zipIn.entries().toList()
+        for (entryIn in entries) {
+          if (!(entryIn.name.toString() in GARBAGE_FILES)) {
+            def entryOut = new ZipEntry(entryIn.name)
+            zipOut.putNextEntry(entryOut)
+            zipIn.getInputStream(entryIn).withCloseable { content ->
+              content.transferTo(zipOut)
+            }
+          }
+         zipOut.closeEntry()
+        }
+        zipOut.finish()
+      }
+    }
+    GroupPrincipal group = Files.readAttributes(file.parent, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
+    Files.getFileAttributeView(fileTemp, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
+    //Files.setOwner(fileTemp, Files.getOwner(file.parent))
+    Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
+  }
+
+  void renumberFiles(Path file) {
+    assert Files.isRegularFile(file)
+    def fileTemp = makeTempPath(file, 'renumbered')
     new ZipFile(file.toFile()).withCloseable { zipIn ->
       new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
         def index = 0
@@ -206,13 +225,17 @@ class Packager {
       }
       println fileName
       if (Files.isDirectory(file)) return
-      if (hasGarbage(file)) {
-        println '  Cleaning garbage'
-        removeGarbage(file)
+      if (hasGarbageDirectories(file)) {
+        println '  Cleaning garbage directories'
+        removeGarbageDirectories(file)
       }
       if (allFilesAreInOneDirectory(file)) {
         println '  Moving files out of directory'
         moveFilesOutOfDirectory(file)
+      }
+      if (hasGarbageFiles(file)) {
+        println '  Cleaning garbage files'
+        removeGarbageFiles(file)
       }
       if (!filesAreCorrectlyNumbered(file)) {
         println '  Renumbering'
@@ -224,12 +247,24 @@ class Packager {
   List<? extends ZipEntry> sortedEntries(Enumeration<? extends ZipEntry> enumeration) {
     def entries = enumeration.toList()
     // Every file evds with a dash or underscore, then a number
-    if (entries.every{fileNameWithoutExtension(it) ==~ /.*[_\-]\d+/}) {
-      entries.toSorted { entry ->
-        def name = fileNameWithoutExtension(entry)
-        def number = (name =~ /\d+$/)[0]
-        number.toBigInteger()
-      }
+    if (entries.every{!it.isDirectory()} && entries.every{fileNameWithoutExtension(it) ==~ /.*[_\-]\d+/}) {
+      entries.
+        // Group by prefix
+        groupBy{(fileNameWithoutExtension(it) =~ /(.*)[_\-]\d+$/)[0][1]}.
+        // Sort each group by postfix
+        collectEntries { prefix, groupedEntries ->
+          [prefix, groupedEntries.toSorted { entry ->
+            def name = fileNameWithoutExtension(entry)
+            def number = (name =~ /\d+$/)[0]
+            number.toBigInteger()
+          }]
+        }.
+        // Sort by prefix
+        toSorted{e1, e2 -> e1.key <=> e2.key}.
+        collect{it.value}.
+        flatten()
+    } else if (entries.every{!it.isDirectory()} && entries.every{fileNameWithoutExtension(it).isInteger()}) {
+      entries.toSorted {fileNameWithoutExtension(it).toBigInteger()}
     } else {
       entries.toSorted{it.name}
     }
