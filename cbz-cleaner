@@ -36,9 +36,7 @@ class Packager {
       def size = zip.size()
       def index = 0
       for (entry in entries) {
-        if (closure.call(entry)) {
-          return true
-        }
+        if (closure.call(entry)) return true
       }
       false
     }
@@ -61,9 +59,7 @@ class Packager {
       def size = zip.size()
       def index = 0
       for (entry in entries) {
-        if (!closure.call(entry, size, index++)) {
-          return false
-        }
+        if (!closure.call(entry, size, index++)) return false
       }
       true
     }
