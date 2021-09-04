@@ -12,8 +12,6 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
-  
-   
 class Packager {
   static GARBAGE_DIRECTORIES = ['__MACOSX/'].toSet()
   static GARBAGE_FILES = ['.DS_Store'].toSet()
@@ -32,10 +30,7 @@ class Packager {
 
   boolean anyZipEntry(Path path, Closure closure) {
     new ZipFile(path.toFile()).withCloseable { zip ->
-      for (entry in sortedEntries(zip.entries())) {
-        if (closure.call(entry)) return true
-      }
-      false
+      sortedEntries(zip.entries()).any{closure.call(it)}
     }
   }
 
@@ -94,6 +89,13 @@ class Packager {
     def fileExtension = fullFileName[fullFileName.lastIndexOf('.')+1..-1]
     file.parent.resolve("$fileName-${tag}.$fileExtension")
   }
+
+  void moveFile(Path from, Path to) {
+    GroupPrincipal group = Files.readAttributes(to, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
+    Files.getFileAttributeView(from, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
+    //Files.setOwner(fileTemp, Files.getOwner(file.parent))
+    Files.move(from, to, StandardCopyOption.REPLACE_EXISTING)
+  }
  
   void moveFilesOutOfDirectory(Path file) {
     assert Files.isRegularFile(file)
@@ -115,10 +117,7 @@ class Packager {
         zipOut.finish()
       }
     }
-    GroupPrincipal group = Files.readAttributes(file.parent, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
-    Files.getFileAttributeView(fileTemp, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
-    //Files.setOwner(fileTemp, Files.getOwner(file.parent))
-    Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
+    moveFile(fileTemp, file)
   }
 
   void removeGarbageDirectories(Path file) {
@@ -140,18 +139,12 @@ class Packager {
         zipOut.finish()
       }
     }
-    GroupPrincipal group = Files.readAttributes(file.parent, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
-    Files.getFileAttributeView(fileTemp, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
-    //Files.setOwner(fileTemp, Files.getOwner(file.parent))
-    Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
+    moveFile(fileTemp, file)
   }
 
   void removeGarbageFiles(Path file) {
     assert Files.isRegularFile(file)
-    def fullFileName = file.fileName.toString()
-    def fileName = fullFileName[fullFileName.lastIndexOf('/')+1..fullFileName.lastIndexOf('.')-1]
-    def fileExtension = fullFileName[fullFileName.lastIndexOf('.')+1..-1]
-    def fileTemp = file.parent.resolve("$fileName-withoutgarbagefiles.$fileExtension")
+    def fileTemp = makeTempPath(file, 'withoutgarbagefiles')
     new ZipFile(file.toFile()).withCloseable { zipIn ->
       new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
         def entries = zipIn.entries().toList()
@@ -168,10 +161,7 @@ class Packager {
         zipOut.finish()
       }
     }
-    GroupPrincipal group = Files.readAttributes(file.parent, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
-    Files.getFileAttributeView(fileTemp, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
-    //Files.setOwner(fileTemp, Files.getOwner(file.parent))
-    Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
+    moveFile(fileTemp, file)
   }
 
   void renumberFiles(Path file) {
@@ -196,10 +186,7 @@ class Packager {
         zipOut.finish()
       }
     }
-    GroupPrincipal group = Files.readAttributes(file.parent, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
-    Files.getFileAttributeView(fileTemp, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
-    //Files.setOwner(fileTemp, Files.getOwner(file.parent))
-    Files.move(fileTemp, file, StandardCopyOption.REPLACE_EXISTING)
+    moveFile(fileTemp, file)
   }
 
   void repackageAll(Path directory) {
