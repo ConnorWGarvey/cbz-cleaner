@@ -107,12 +107,8 @@ class Packager {
         assert directoryEntry.isDirectory()
         while (entries.hasMoreElements()) {
           def entryIn = entries.nextElement()
-          def entryOut = new ZipEntry(entryIn.name[entryIn.name.lastIndexOf('/')+1..-1])
-          zipOut.putNextEntry(entryOut)
-          zipIn.getInputStream(entryIn).withCloseable { content ->
-            content.transferTo(zipOut)
-          }
-          zipOut.closeEntry()
+          def nameOut = entryIn.name[entryIn.name.lastIndexOf('/')+1..-1]
+          writeEntry(entryIn:entryIn, nameOut:nameOut, zipIn:zipIn, zipOut:zipOut)
         }
         zipOut.finish()
       }
@@ -128,13 +124,8 @@ class Packager {
         def entries = zipIn.entries().toList().toSorted{it.name}
         for (entryIn in entries) {
           if (!GARBAGE_DIRECTORIES.any{entryIn.name.toString().startsWith(it)}) {
-            def entryOut = new ZipEntry(entryIn.name)
-            zipOut.putNextEntry(entryOut)
-            zipIn.getInputStream(entryIn).withCloseable { content ->
-              content.transferTo(zipOut)
-            }
+            writeEntry(entryIn:entryIn, nameOut:entryIn.name, zipIn:zipIn, zipOut:zipOut)
           }
-         zipOut.closeEntry()
         }
         zipOut.finish()
       }
@@ -150,13 +141,8 @@ class Packager {
         def entries = zipIn.entries().toList()
         for (entryIn in entries) {
           if (!(entryIn.name.toString() in GARBAGE_FILES)) {
-            def entryOut = new ZipEntry(entryIn.name)
-            zipOut.putNextEntry(entryOut)
-            zipIn.getInputStream(entryIn).withCloseable { content ->
-              content.transferTo(zipOut)
-            }
+            writeEntry(entryIn:entryIn, nameOut:entryIn.name, zipIn:zipIn, zipOut:zipOut)
           }
-         zipOut.closeEntry()
         }
         zipOut.finish()
       }
@@ -169,19 +155,11 @@ class Packager {
     def fileTemp = makeTempPath(file, 'renumbered')
     new ZipFile(file.toFile()).withCloseable { zipIn ->
       new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
-        def index = 0
-        def entries = sortedEntries(zipIn.entries())
-        entries.each { entryIn ->
+        sortedEntries(zipIn.entries()).eachWithIndex { entryIn, index ->
           def oldName = entryIn.name
           def extension = oldName[oldName.lastIndexOf('.')+1..-1]
           def number = String.format("%0${zipIn.size().toString().length()}d", index+1)
-          def entryOut = new ZipEntry("${number}.$extension")
-          zipOut.putNextEntry(entryOut)
-          zipIn.getInputStream(entryIn).withCloseable { content ->
-            content.transferTo(zipOut)
-          }
-          zipOut.closeEntry()
-          ++index
+          writeEntry(entryIn:entryIn, nameOut:"${number}.$extension", zipIn:zipIn, zipOut:zipOut)
         }
         zipOut.finish()
       }
@@ -242,6 +220,16 @@ class Packager {
     } else {
       entries.toSorted{it.name}
     }
+  }
+
+  void writeEntry(Map opts) {
+    def zipOut = opts.zipOut
+    def entryOut = new ZipEntry(opts.nameOut)
+    zipOut.putNextEntry(entryOut)
+    opts.zipIn.getInputStream(opts.entryIn).withCloseable { content ->
+      content.transferTo(zipOut)
+    }
+    zipOut.closeEntry()
   }
 }
 
