@@ -21,14 +21,11 @@ class Packager {
 
   boolean allFilesAreInOneDirectory(Path path) {
     new ZipFile(path.toFile()).withCloseable { zip ->
-      def entries = zip.entries()
-      def directoryEntry = entries.hasMoreElements() ? entries.nextElement() : null
-      if (!directoryEntry?.isDirectory()) return false
-      while(entries.hasMoreElements()) {
-        def entry = entries.nextElement()
-        if (entry.isDirectory()) return false
-        if (!entry.name.startsWith(directoryEntry.name)) return false
-      }
+      def entries = sortedEntries(zip.entries())
+      def directoryEntries = entries.findAll{it.isDirectory()}
+      if (directoryEntries.size() != 1) return false
+      def directoryEntry = directoryEntries[0]
+      if (entries.any{(!it.isDirectory()) && (!it.name.startsWith(directoryEntry.name))}) return false
       true
     }
   }
