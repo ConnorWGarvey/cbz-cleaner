@@ -32,10 +32,7 @@ class Packager {
 
   boolean anyZipEntry(Path path, Closure closure) {
     new ZipFile(path.toFile()).withCloseable { zip ->
-      def entries = sortedEntries(zip.entries())
-      def size = zip.size()
-      def index = 0
-      for (entry in entries) {
+      for (entry in sortedEntries(zip.entries())) {
         if (closure.call(entry)) return true
       }
       false
