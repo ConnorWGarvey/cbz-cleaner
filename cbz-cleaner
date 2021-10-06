@@ -13,9 +13,10 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 class Packager {
+  static ARCHIVE_EXTENSIONS = ['cbz','zip'].toSet()
   static GARBAGE_DIRECTORIES = ['__MACOSX/'].toSet()
-  static GARBAGE_FILES = ['.DS_Store'].toSet()
-  static ARCHIVE_EXTENSIONS = ['cbz', 'zip'].toSet()
+  static GARBAGE_FILES = ['.DS_Store','mimetype'].toSet()
+  static IMAGE_EXTENSIONS = ['jpeg','jpg','webp'].toSet()
 
   boolean allFilesAreInOneDirectory(Path path) {
     new ZipFile(path.toFile()).withCloseable { zip ->
@@ -63,9 +64,12 @@ class Packager {
   }
 
   String fileName(ZipEntry entry) {
-    def name = entry.name
-    if (name.contains('/')) name[name.lastIndexOf('/')+1..-1]
-    else name
+    def fullName = entry.name
+    def name = fullName.contains('/') ? fullName[fullName.lastIndexOf('/')+1..-1] : fullName
+    if (!isKnownFileType(name)) {
+      throw new IllegalStateException("Unknown file type: $name")
+    }
+    name
   }
 
   String fileNameWithoutExtension(ZipEntry entry) {
@@ -81,6 +85,12 @@ class Packager {
 
   boolean hasGarbageFiles(Path path) {
     anyZipEntry(path) { fileName(it) in GARBAGE_FILES }
+  }
+
+  boolean isKnownFileType(String name) {
+    if (name in GARBAGE_FILES) return true
+    def extension = name[name.lastIndexOf('.')+1..-1]
+    extension in IMAGE_EXTENSIONS
   }
 
   Path makeTempPath(Path file, String tag) {

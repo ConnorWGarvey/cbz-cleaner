@@ -1,0 +1,55 @@
+#!/usr/bin/env groovy
+
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+
+class Converter {
+  void apply(String file) {
+    def name = fileName(file)
+    def extracted = Paths.get("$name/").toAbsolutePath()
+    trimAll(extracted)
+  }
+
+  void execute(List<String> command) {
+    def proc = command.execute()
+    def out = proc.in.text
+    def err = proc.err.text
+    proc.waitFor()
+    def exitValue = proc.exitValue()
+    if (exitValue != 0) {
+      throw new ExitException("$out\n\n$err")
+    }
+  }
+
+  String fileName(String name) {
+    name[0..name.lastIndexOf('.')-1]
+  }
+
+  Path trimAll(Path sourceDirectory) {
+    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName.toString()}-trimmed")
+    Files.createDirectories(targetDirectory)
+    sourceDirectory.eachFile { sourcePath ->
+      def targetPath = targetDirectory.resolve(sourcePath.fileName)
+      if (!Files.exists(targetPath)) {
+        println "Trimming ${sourcePath.fileName}"
+        execute(['convert', '-fuzz', '1%', '-trim', sourcePath.toString(), targetPath.toString()])
+      }
+    }
+  }
+}
+
+class ExitException extends Exception {
+  public ExitException(String message) {
+    super(message)
+  }
+}
+
+def file = args[0]
+try {
+  new Converter().apply(file)
+} catch (ExitException e) {
+  println e.message
+  System.exit(1)
+}
+
