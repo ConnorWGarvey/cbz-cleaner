@@ -13,16 +13,14 @@ import java.util.zip.ZipOutputStream
 
 class Converter {
   void apply(String file) {
+    def extracted = extractImages(Paths.get(file).toAbsolutePath())
     def name = fileNameWithoutExtension(file)
-    def extracted = Paths.get("$name/").toAbsolutePath()
     def trimmed = trimAll(extracted)
-    def scaled = scaleAll(trimmed)
     def cbz = Paths.get("${name}.cbz").toAbsolutePath()
-    writeCbz(cbz, scaled)
+    writeCbz(cbz, trimmed)
     copyPermissions(Paths.get(file).toAbsolutePath(), cbz)
     extracted.deleteDir()
     trimmed.deleteDir()
-    scaled.deleteDir()
   }
 
   void copyPermissions(Path from, Path to) {
@@ -41,6 +39,17 @@ class Converter {
     }
   }
 
+  Path extractImages(Path path) {
+    println 'Extracting images from the PDF'
+    def name = fileNameWithoutExtension(path)
+    def targetDirectory = Paths.get(name).toAbsolutePath()
+    Files.createDirectories(targetDirectory)
+    if (Files.list(targetDirectory).toList().isEmpty()) {
+      execute(['gs', '-dNOPAUSE' , '-dBATCH', '-sDEVICE=png16m', "-sOutputFile=\"${targetDirectory.toString()}/%04d.png\"", '-r600', "${name}.pdf"])
+    }
+    targetDirectory
+  }
+
   String fileNameWithoutExtension(Path path) {
     fileNameWithoutExtension(path.fileName.toString())
   }
@@ -49,29 +58,15 @@ class Converter {
     name[0..name.lastIndexOf('.')-1]
   }
 
-  Path scaleAll(Path sourceDirectory) {
-    println 'Scaling'
-    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-scaled")
-    Files.createDirectories(targetDirectory)
-    sourceDirectory.eachFile { sourcePath ->
-      def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.webp")
-      if (!Files.exists(targetPath)) {
-        println "  Scaling ${sourcePath.fileName}"
-        execute(['convert', '-resize', '2000>x2000>', '-quality', '95', sourcePath.toString(), targetPath.toString()])
-      }
-    }
-    targetDirectory
-  }
-
   Path trimAll(Path sourceDirectory) {
     println 'Trimming'
     def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-trimmed")
     Files.createDirectories(targetDirectory)
     sourceDirectory.eachFile { sourcePath ->
-      def targetPath = targetDirectory.resolve(sourcePath.fileName)
+      def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.webp")
       if (!Files.exists(targetPath)) {
         println "  Trimming ${sourcePath.fileName}"
-        execute(['convert', '-fuzz', '1%', '-trim', sourcePath.toString(), targetPath.toString()])
+        execute(['convert', '-fuzz', '1%', '-trim', '-resize', '2000>x2000>', '-quality', '95', sourcePath.toString(), targetPath.toString()])
       }
     }
     targetDirectory
