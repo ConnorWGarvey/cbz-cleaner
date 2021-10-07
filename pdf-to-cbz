@@ -1,14 +1,33 @@
 #!/usr/bin/env groovy
 
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.attribute.GroupPrincipal
+import java.nio.file.attribute.PosixFileAttributes
+import java.nio.file.attribute.PosixFileAttributeView
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 class Converter {
   void apply(String file) {
-    def name = fileName(file)
+    def name = fileNameWithoutExtension(file)
     def extracted = Paths.get("$name/").toAbsolutePath()
-    trimAll(extracted)
+    def trimmed = trimAll(extracted)
+    def scaled = scaleAll(trimmed)
+    def cbz = Paths.get("${name}.cbz").toAbsolutePath()
+    writeCbz(cbz, scaled)
+    copyPermissions(Paths.get(file).toAbsolutePath(), cbz)
+    extracted.deleteDir()
+    trimmed.deleteDir()
+    scaled.deleteDir()
+  }
+
+  void copyPermissions(Path from, Path to) {
+    GroupPrincipal group = Files.readAttributes(from, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
+    Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
   }
 
   void execute(List<String> command) {
@@ -22,19 +41,56 @@ class Converter {
     }
   }
 
-  String fileName(String name) {
+  String fileNameWithoutExtension(Path path) {
+    fileNameWithoutExtension(path.fileName.toString())
+  }
+
+  String fileNameWithoutExtension(String name) {
     name[0..name.lastIndexOf('.')-1]
   }
 
+  Path scaleAll(Path sourceDirectory) {
+    println 'Scaling'
+    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-scaled")
+    Files.createDirectories(targetDirectory)
+    sourceDirectory.eachFile { sourcePath ->
+      def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.webp")
+      if (!Files.exists(targetPath)) {
+        println "  Scaling ${sourcePath.fileName}"
+        execute(['convert', '-resize', '2000>x2000>', '-quality', '95', sourcePath.toString(), targetPath.toString()])
+      }
+    }
+    targetDirectory
+  }
+
   Path trimAll(Path sourceDirectory) {
-    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName.toString()}-trimmed")
+    println 'Trimming'
+    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-trimmed")
     Files.createDirectories(targetDirectory)
     sourceDirectory.eachFile { sourcePath ->
       def targetPath = targetDirectory.resolve(sourcePath.fileName)
       if (!Files.exists(targetPath)) {
-        println "Trimming ${sourcePath.fileName}"
+        println "  Trimming ${sourcePath.fileName}"
         execute(['convert', '-fuzz', '1%', '-trim', sourcePath.toString(), targetPath.toString()])
       }
+    }
+    targetDirectory
+  }
+
+  void writeCbz(Path target, Path sourceDirectory) {
+    println 'Compressing'
+    assert Files.isDirectory(sourceDirectory)
+    new ZipOutputStream(Files.newOutputStream(target)).withCloseable { zipOut ->
+      Files.list(sourceDirectory).toList().toSorted().each { sourcePath ->
+        println "  Compressing ${sourcePath.fileName}"
+        def entryOut = new ZipEntry(sourcePath.fileName.toString())
+        zipOut.putNextEntry(entryOut)
+        Files.newInputStream(sourcePath).withCloseable { content ->
+          content.transferTo(zipOut)
+        }
+        zipOut.closeEntry()
+      }
+      zipOut.finish()
     }
   }
 }
