@@ -1,6 +1,5 @@
 #!/usr/bin/env groovy
 
-import groovy.cli.commons.CliBuilder
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -13,23 +12,20 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 class Converter {
-  void apply(Map opts=[:], Path file) {
+  void apply(Path file) {
     def extracted = extractImages(file)
     def name = fileNameWithoutExtension(file)
-    def trimmed = trimAll(extracted)
     def cbz = Paths.get("${name}.cbz").toAbsolutePath()
-    writeCbz(cbz, trimmed)
+    writeCbz(cbz, extracted)
     copyPermissions(file, cbz)
     extracted.deleteDir()
-    trimmed.deleteDir()
-    if (opts.delete) Files.delete(file)
   }
 
-  void applyAll(Map opts=[:], Path directory) {
+  void applyAll(Path directory) {
     directory.eachFile { file ->
       if (fileExtension(file) == 'pdf') {
         println "Converting ${file.fileName}"
-        apply(file, delete:opts.delete)
+        apply(file)
       }
     }
   }
@@ -39,7 +35,7 @@ class Converter {
     Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
   }
 
-  void execute(List<String> command) {
+  String execute(List<String> command) {
     def proc = command.execute()
     def out = proc.in.text
     def err = proc.err.text
@@ -48,15 +44,24 @@ class Converter {
     if (exitValue != 0) {
       throw new ExitException("$out\n\n$err")
     }
+    out
   }
 
   Path extractImages(Path path) {
-    println "  Extracting images from ${path.fileName}"
+    println "  Counting pages in ${path.fileName}"
     def name = fileNameWithoutExtension(path)
     def targetDirectory = Paths.get(name).toAbsolutePath()
     Files.createDirectories(targetDirectory)
-    if (Files.list(targetDirectory).toList().isEmpty()) {
-      execute(['gs', '-dNOPAUSE' , '-dBATCH', '-sDEVICE=png16m', "-sOutputFile=\"${targetDirectory.toString()}/%04d.png\"", '-r600', "${name}.pdf"])
+    def pages = execute(['identify', path.toString()]).readLines().size()
+    def digits = pages.toString().length()
+    println "  Extracting images from ${path.fileName}"
+    (1..pages).each { page ->
+      def formattedPage = String.format("%0${digits}d", page)
+      def targetPath = targetDirectory.resolve("${formattedPage}.webp")
+      if (!Files.exists(targetPath)) {
+        println "    Extracting page $formattedPage/$pages"
+        execute(['convert', '-density', '600', '-alpha', 'flatten', "${path}[${page-1}]", '-fuzz', '4%', '-trim', '+repage', '-resize', '2000>x2000>', '+repage', '-quality', '95', targetPath.toString()])
+      }
     }
     targetDirectory
   }
@@ -72,20 +77,6 @@ class Converter {
 
   String fileNameWithoutExtension(String name) {
     name[0..name.lastIndexOf('.')-1]
-  }
-
-  Path trimAll(Path sourceDirectory) {
-    println "  Trimming images in ${sourceDirectory.fileName}"
-    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-trimmed")
-    Files.createDirectories(targetDirectory)
-    sourceDirectory.eachFile { sourcePath ->
-      def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.webp")
-      if (!Files.exists(targetPath)) {
-        println "    Trimming ${sourcePath.fileName}"
-        execute(['convert', '-alpha', 'flatten', sourcePath.toString(), '-fuzz', '4%', '-trim', '+repage', '-resize', '2000>x2000>', '+repage', '-quality', '95', targetPath.toString()])
-      }
-    }
-    targetDirectory
   }
 
   void writeCbz(Path target, Path sourceDirectory) {
@@ -112,12 +103,7 @@ class ExitException extends Exception {
 }
 
 try {
-  def parser = new CliBuilder(usage:'pdf-to-cbz').with {
-    _ longOpt:'delete', 'Delete the PDF file after conversion'
-    it
-  }
-  def options = parser.parse(args)
-  new Converter().applyAll(Paths.get(''), delete:options.delete)
+  new Converter().applyAll(Paths.get(''))
 } catch (ExitException e) {
   println e.message
   System.exit(1)
