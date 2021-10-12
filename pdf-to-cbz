@@ -52,11 +52,11 @@ class Converter {
 
   Path extractImages(Path path) {
     println "  Extracting images from ${path.fileName}"
-    def name = fileNameWithoutExtension(path)
+    def name = "${fileNameWithoutExtension(path)}-extracted"
     def targetDirectory = Paths.get(name).toAbsolutePath()
     Files.createDirectories(targetDirectory)
     if (Files.list(targetDirectory).toList().isEmpty()) {
-      execute(['gs', '-dNOPAUSE' , '-dBATCH', '-sDEVICE=png16m', "-sOutputFile=\"${targetDirectory.toString()}/%04d.png\"", '-r600', "${name}.pdf"])
+      execute(['gs', '-dNOPAUSE' , '-dBATCH', '-sDEVICE=png16m', "-sOutputFile=\"${targetDirectory.toString()}/%05d.png\"", '-r600', path.fileName.toString()])
     }
     targetDirectory
   }
@@ -82,7 +82,7 @@ class Converter {
       def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.webp")
       if (!Files.exists(targetPath)) {
         println "    Trimming ${sourcePath.fileName}"
-        execute(['convert', '-alpha', 'flatten', sourcePath.toString(), '-fuzz', '4%', '-trim', '+repage', '-resize', '2000>x2000>', '+repage', '-quality', '95', targetPath.toString()])
+        execute(['convert', '-alpha', 'flatten', sourcePath.toString(), '-fuzz', '4%', '-trim', '+repage', '-resize', '2500>x2500>', '+repage', '-quality', '95', targetPath.toString()])
       }
     }
     targetDirectory
@@ -91,9 +91,12 @@ class Converter {
   void writeCbz(Path target, Path sourceDirectory) {
     println '  Compressing the CBZ'
     assert Files.isDirectory(sourceDirectory)
+    def sourcePaths = Files.list(sourceDirectory).toList().toSorted()
+    def digits = sourcePaths.size().toString().length()
     new ZipOutputStream(Files.newOutputStream(target)).withCloseable { zipOut ->
-      Files.list(sourceDirectory).toList().toSorted().each { sourcePath ->
-        def entryOut = new ZipEntry(sourcePath.fileName.toString())
+      sourcePaths.eachWithIndex { sourcePath, index ->
+        def formattedIndex = String.format("%0${digits}d", index+1)
+        def entryOut = new ZipEntry("${formattedIndex}.${fileExtension(sourcePath)}")
         zipOut.putNextEntry(entryOut)
         Files.newInputStream(sourcePath).withCloseable { content ->
           content.transferTo(zipOut)
