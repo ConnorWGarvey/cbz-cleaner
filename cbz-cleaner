@@ -13,10 +13,10 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 class Packager {
-  static ARCHIVE_EXTENSIONS = ['cbz','zip'].toSet()
+  static ARCHIVE_EXTENSIONS = ['cbz'].toSet()
   static GARBAGE_DIRECTORIES = ['__MACOSX/'].toSet()
   static GARBAGE_FILES = ['.DS_Store','mimetype'].toSet()
-  static IMAGE_EXTENSIONS = ['jpeg','jpg','webp'].toSet()
+  static IMAGE_EXTENSIONS = ['jpeg','jpg','png','webp'].toSet()
 
   boolean allFilesAreInOneDirectory(Path path) {
     new ZipFile(path.toFile()).withCloseable { zip ->

@@ -16,7 +16,7 @@ class Converter {
   void apply(Map opts=[:], Path file) {
     def extracted = extractImages(file)
     def name = fileNameWithoutExtension(file)
-    def trimmed = trimAll(extracted)
+    def trimmed = trimAll(extracted, compression:opts.compression)
     def cbz = Paths.get("${name}.cbz").toAbsolutePath()
     writeCbz(cbz, trimmed)
     copyPermissions(file, cbz)
@@ -26,17 +26,20 @@ class Converter {
   }
 
   void applyAll(Map opts=[:], Path directory) {
-    directory.eachFile { file ->
-      if (fileExtension(file) == 'pdf') {
+    def done = [] as Set
+    do {
+      def file = firstWithExtension(directory, 'pdf', exclude:done)
+      if (file) {
         println "Converting ${file.fileName}"
-        apply(file, delete:opts.delete)
+        apply(file, compression:opts.compression, delete:opts.delete)
       }
-    }
+      done << file.toAbsolutePath()
+    } while (firstWithExtension(directory, 'pdf', exclude:done))
   }
 
   void copyPermissions(Path from, Path to) {
-    GroupPrincipal group = Files.readAttributes(from, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
-    Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
+    GroupPrincipal group = Files.readAttributes(from, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group()
+    Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group)
   }
 
   void execute(List<String> command) {
@@ -74,12 +77,18 @@ class Converter {
     name[0..name.lastIndexOf('.')-1]
   }
 
-  Path trimAll(Path sourceDirectory) {
+  Path firstWithExtension(Map opts=[:], Path directory, String extension) {
+    def exclude = opts.exclude ?: []
+    Files.list(directory).toList().find { (fileExtension(it) == extension) && (it.toAbsolutePath() !in exclude) }
+  }
+
+  Path trimAll(Map opts=[:], Path sourceDirectory) {
+    def compression = opts.compression ?: 'webp'
     println "  Trimming images in ${sourceDirectory.fileName}"
     def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-trimmed")
     Files.createDirectories(targetDirectory)
     sourceDirectory.eachFile { sourcePath ->
-      def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.webp")
+      def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.$compression")
       if (!Files.exists(targetPath)) {
         println "    Trimming ${sourcePath.fileName}"
         execute(['convert', '-alpha', 'flatten', sourcePath.toString(), '-fuzz', '4%', '-trim', '+repage', '-resize', '2500>x2500>', '+repage', '-quality', '95', targetPath.toString()])
@@ -115,12 +124,12 @@ class ExitException extends Exception {
 }
 
 try {
-  def parser = new CliBuilder(usage:'pdf-to-cbz').with {
+  def parser = new CliBuilder(usage:'pdf-to-cbz').tap {
     _ longOpt:'delete', 'Delete the PDF file after conversion'
-    it
+    _ longOpt:'compression', args:1, defaultValue:'webp', 'The type of image compression to use in the cbz'
   }
   def options = parser.parse(args)
-  new Converter().applyAll(Paths.get(''), delete:options.delete)
+  new Converter().applyAll(Paths.get(''), compression:options.compression, delete:options.delete)
 } catch (ExitException e) {
   println e.message
   System.exit(1)

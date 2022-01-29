@@ -12,19 +12,20 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 class Converter {
-  void apply(Path file) {
+  void apply(Map opts=[:], Path file) {
     def name = file.fileName.toString()
     def trimmed = trimAll(file)
     def cbz = Paths.get("${name}.cbz").toAbsolutePath()
     writeCbz(cbz, trimmed)
     copyPermissions(file, cbz)
     trimmed.deleteDir()
+    if (opts.delete) file.deleteDir()
   }
 
-  void applyAll(Path directory) {
+  void applyAll(Map opts=[:], Path directory) {
     directory.eachDir { file ->
       println "Converting ${file.fileName}"
-      apply(file)
+      apply(file, delete:opts.delete)
     }
   }
 
@@ -95,7 +96,11 @@ class ExitException extends Exception {
 }
 
 try {
-  new Converter().applyAll(Paths.get('').toAbsolutePath())
+  def parser = new CliBuilder(usage:'images-to-cbz').tap {
+    _ longOpt:'delete', 'Delete the image directory after conversion'
+  }
+  def options = parser.parse(args)
+  new Converter().applyAll(Paths.get('').toAbsolutePath(), delete:options.delete)
 } catch (ExitException e) {
   println e.message
   System.exit(1)
