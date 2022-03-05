@@ -1,0 +1,105 @@
+#!/usr/bin/env groovy
+
+import groovy.transform.ToString
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.attribute.GroupPrincipal
+import java.nio.file.attribute.PosixFileAttributes
+import java.nio.file.attribute.PosixFileAttributeView
+import java.text.DecimalFormat
+
+class Combiner {
+  void apply(Map opts=[:], Path parentDirectory) {
+    def directories = parentDirectory.listSorted().findAll{it.isDirectory()}
+    if (directories.isEmpty()) return
+    def volume = null
+    directories.each { directory ->
+      if (directory.name.contains(' - Volume ')) {
+        def thisVolume = Volume.parse(directory)
+        if ((thisVolume) == null) {
+          throw new ExitException("Error parsing volume ${directory.name}")
+        }
+        volume = thisVolume
+        clean(directory)
+        renumber(directory:directory, issue:volume.start)
+      } else {
+        clean(directory)
+        def issue = (directory.name =~ /.* - (\d{4})$/)[0][1].toInt()
+        println issue
+        //merge(directory:directory, index:index)
+      }
+    }
+  }
+
+  def clean(Path directory) {
+    def nomedia = directory.resolve('.nomedia')
+    if (nomedia.exists()) nomedia.delete()
+    directory.eachFile {
+      if (!it.nameWithoutExtension.isInteger())
+        throw new ExitException("Can only handle file names that are numbers and $it isn't one")
+    }
+  }
+
+  void renumber(Map opts) {
+    def issue = opts.issue.zeroPad(6)
+    opts.directory.eachFileOrdered{it.renameTo("${issue}${it.nameWithoutExtension.toInt().zeroPad(6)}.${it.extension}")}
+  }
+}
+
+class ExitException extends Exception {
+  public ExitException(String message) {
+    super(message)
+  }
+}
+
+@ToString(includeNames=true) class Volume {
+  BigDecimal end
+  int number
+  BigDecimal start
+
+  static Volume parse(Path path) {
+    def match = path.name =~ /.* (\d{4}(?:\.\d+)?)-(\d{4}(?:\.\d+)?) - Volume (\d{2})/
+    if (match.size() == 1) {
+      def group = match[0]
+      return new Volume(end:group[2] as BigDecimal, number:group[3] as Integer, start:group[1] as BigDecimal)
+    } else return null
+  }
+}
+
+BigDecimal.metaClass.zeroPad = {int amount -> new DecimalFormat("${'0'*amount}.######").format(delegate)}
+Integer.metaClass.zeroPad = {int amount -> String.format("%0${amount}d", delegate)}
+Path.metaClass.copyPermissions = { Path to ->
+  GroupPrincipal group = Files.readAttributes(delegate, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
+  Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
+}
+Path.metaClass.delete = {Files.delete(delegate)}
+Path.metaClass.eachFileOrdered = {Closure closure -> delegate.listSorted().each{closure.call(it)}}
+Path.metaClass.exists = {Files.exists(delegate)}
+Path.metaClass.getExtension = {delegate.name[delegate.name.lastIndexOf('.')+1..-1]}
+Path.metaClass.getName = {
+  def name = delegate.toString()
+  name[name.lastIndexOf('/')+1..-1]
+}
+Path.metaClass.getNameWithoutExtension = {delegate.name[0..delegate.name.lastIndexOf('.')-1]}
+Path.metaClass.isDirectory = {Files.isDirectory(delegate)}
+Path.metaClass.listSorted = {Files.list(delegate).toList().toSorted()}
+Path.metaClass.moveTo = {Path destination -> Files.move(delegate, destination)}
+Path.metaClass.renameTo = { String newName ->
+  def destination = delegate.parent.resolve(newName)
+  delegate.moveTo(destination)
+}
+String.metaClass.toInt = {delegate as Integer}
+
+try {
+  def parser = new CliBuilder(usage:'combine-comic-volumes').tap {
+    _ longOpt:'compression', args:1, defaultValue:'png', 'image compression'
+  }
+  def options = parser.parse(args)
+  new Combiner().apply(Paths.get('').toAbsolutePath(), compression:options.compression)
+} catch (ExitException e) {
+  println e.message
+  System.exit(1)
+}
+
