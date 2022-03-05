@@ -14,7 +14,7 @@ import java.util.zip.ZipOutputStream
 class Converter {
   void apply(Map opts=[:], Path file) {
     def name = file.fileName.toString()
-    def trimmed = trimAll(file)
+    def trimmed = trimAll(file, quality:opts.quality)
     def cbz = Paths.get("${name}.cbz").toAbsolutePath()
     writeCbz(cbz, trimmed)
     copyPermissions(file, cbz)
@@ -25,7 +25,7 @@ class Converter {
   void applyAll(Map opts=[:], Path directory) {
     directory.eachDir { file ->
       println "Converting ${file.fileName}"
-      apply(file, delete:opts.delete)
+      apply(file, delete:opts.delete, quality:opts.quality)
     }
   }
 
@@ -58,15 +58,16 @@ class Converter {
     name[0..name.lastIndexOf('.')-1]
   }
 
-  Path trimAll(Path sourceDirectory) {
+  Path trimAll(Map opts=[:], Path sourceDirectory) {
     println '  Trimming images'
+    def quality = opts.quality ?: '94'
     def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-trimmed")
     Files.createDirectories(targetDirectory)
     sourceDirectory.eachFile { sourcePath ->
       def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.webp")
       if (!Files.exists(targetPath)) {
         println "    Trimming ${sourcePath.fileName}"
-        execute(['convert', '-fuzz', '4%', '-trim', '+repage', '-resize', '2500>x2500>', '-quality', '95', sourcePath.toString(), targetPath.toString()])
+        execute(['convert', '-fuzz', '4%', '-trim', '+repage', '-resize', '2500>x2500>', '-quality', quality, sourcePath.toString(), targetPath.toString()])
       }
     }
     targetDirectory
@@ -98,9 +99,10 @@ class ExitException extends Exception {
 try {
   def parser = new CliBuilder(usage:'images-to-cbz').tap {
     _ longOpt:'delete', 'Delete the image directory after conversion'
+    _ longOpt:'quality', args:1, defaultValue:'94', 'Compressed image quality'
   }
   def options = parser.parse(args)
-  new Converter().applyAll(Paths.get('').toAbsolutePath(), delete:options.delete)
+  new Converter().applyAll(Paths.get('').toAbsolutePath(), delete:options.delete, quality:options.quality)
 } catch (ExitException e) {
   println e.message
   System.exit(1)
