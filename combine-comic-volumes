@@ -15,6 +15,7 @@ class Combiner {
     def directories = parentDirectory.listSorted().findAll{it.isDirectory()}
     if (directories.isEmpty()) return
     def volume = null
+    println 'Moving images'
     directories.each { directory ->
       if (directory.name.contains(' - Volume ')) {
         def thisVolume = Volume.parse(directory)
@@ -22,29 +23,75 @@ class Combiner {
           throw new ExitException("Error parsing volume ${directory.name}")
         }
         volume = thisVolume
+        println "  Moving volume $volume.number"
         clean(directory)
         renumber(directory:directory, issue:volume.start)
       } else {
         clean(directory)
-        def issue = (directory.name =~ /.* - (\d{4})$/)[0][1].toInt()
-        println issue
-        //merge(directory:directory, index:index)
+        def issue = (directory.name =~ /.* - (\d{4}(?:\.\d+)?)$/)[0][1] as BigDecimal
+        renumber(directory:directory, issue:issue)
+        mergeDirectory(destination:volume.directory, source:directory)
       }
+    }
+    convertAll(directory:parentDirectory, compression:opts.compression)
+  }
+
+  void convert(Map opts) {
+    def sourceDirectory = opts.directory
+    println "  Converting $sourceDirectory.name"
+    def compression = opts.compression
+    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-$compression")
+    Files.createDirectories(targetDirectory)
+    sourceDirectory.eachFile { sourcePath ->
+      def targetPath = targetDirectory.resolve("${sourcePath.nameWithoutExtension}.$compression")
+      if (!targetPath.exists()) {
+        println "    Converting ${sourcePath.fileName} to $compression"
+        execute(['convert', sourcePath.toString(), targetPath.toString()])
+      }
+    }
+    def aSourceFile = sourceDirectory.list()[0]
+    targetDirectory.eachFile{aSourceFile.copyPermissionsTo(it)}
+    sourceDirectory.deleteDir()
+    targetDirectory.moveTo(sourceDirectory)
+  }
+
+  void convertAll(Map opts) {
+    println 'Converting images'
+    opts.directory.listSorted().findAll{it.isDirectory()}.each { directory ->
+      convert(compression:opts.compression, directory:directory)
     }
   }
 
-  def clean(Path directory) {
+  void clean(Path directory) {
     def nomedia = directory.resolve('.nomedia')
     if (nomedia.exists()) nomedia.delete()
-    directory.eachFile {
-      if (!it.nameWithoutExtension.isInteger())
-        throw new ExitException("Can only handle file names that are numbers and $it isn't one")
+  }
+
+  void execute(List<String> command) {
+    def proc = command.execute()
+    def out = proc.in.text
+    def err = proc.err.text
+    proc.waitFor()
+    def exitValue = proc.exitValue()
+    if (exitValue != 0) {
+      throw new ExitException("$out\n\n$err")
     }
+  }
+
+  void mergeDirectory(Map opts) {
+    opts.source.eachFile { file ->
+      def target = opts.destination.resolve(file.name)
+      if (target.exists()) throw new ExitException("Can't create $file because it exists")
+      file.moveTo(target)
+    }
+    opts.source.delete()
   }
 
   void renumber(Map opts) {
     def issue = opts.issue.zeroPad(6)
-    opts.directory.eachFileOrdered{it.renameTo("${issue}${it.nameWithoutExtension.toInt().zeroPad(6)}.${it.extension}")}
+    opts.directory.eachFileOrderedWithIndex { path, index ->
+      path.renameTo("${issue}-${(index+1).zeroPad(6)}.${path.extension}")
+    }
   }
 }
 
@@ -55,6 +102,7 @@ class ExitException extends Exception {
 }
 
 @ToString(includeNames=true) class Volume {
+  Path directory
   BigDecimal end
   int number
   BigDecimal start
@@ -63,19 +111,22 @@ class ExitException extends Exception {
     def match = path.name =~ /.* (\d{4}(?:\.\d+)?)-(\d{4}(?:\.\d+)?) - Volume (\d{2})/
     if (match.size() == 1) {
       def group = match[0]
-      return new Volume(end:group[2] as BigDecimal, number:group[3] as Integer, start:group[1] as BigDecimal)
+      return new Volume(directory:path, end:group[2] as BigDecimal, number:group[3] as Integer, start:group[1] as BigDecimal)
     } else return null
   }
 }
 
 BigDecimal.metaClass.zeroPad = {int amount -> new DecimalFormat("${'0'*amount}.######").format(delegate)}
 Integer.metaClass.zeroPad = {int amount -> String.format("%0${amount}d", delegate)}
-Path.metaClass.copyPermissions = { Path to ->
+Path.metaClass.copyPermissionsTo = { Path to ->
   GroupPrincipal group = Files.readAttributes(delegate, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
   Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
 }
 Path.metaClass.delete = {Files.delete(delegate)}
 Path.metaClass.eachFileOrdered = {Closure closure -> delegate.listSorted().each{closure.call(it)}}
+Path.metaClass.eachFileOrderedWithIndex = {Closure closure ->
+  delegate.listSorted().eachWithIndex{item, index -> closure.call(item, index)}
+}
 Path.metaClass.exists = {Files.exists(delegate)}
 Path.metaClass.getExtension = {delegate.name[delegate.name.lastIndexOf('.')+1..-1]}
 Path.metaClass.getName = {
@@ -84,12 +135,14 @@ Path.metaClass.getName = {
 }
 Path.metaClass.getNameWithoutExtension = {delegate.name[0..delegate.name.lastIndexOf('.')-1]}
 Path.metaClass.isDirectory = {Files.isDirectory(delegate)}
-Path.metaClass.listSorted = {Files.list(delegate).toList().toSorted()}
+Path.metaClass.list = {Files.list(delegate).toList()}
+Path.metaClass.listSorted = {delegate.list().toSorted()}
 Path.metaClass.moveTo = {Path destination -> Files.move(delegate, destination)}
 Path.metaClass.renameTo = { String newName ->
   def destination = delegate.parent.resolve(newName)
   delegate.moveTo(destination)
 }
+String.metaClass.toBigDecimal = {delegate as BigDecimal}
 String.metaClass.toInt = {delegate as Integer}
 
 try {
