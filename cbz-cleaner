@@ -65,7 +65,9 @@ class Packager {
 
   String fileName(ZipEntry entry) {
     def fullName = entry.name
-    def name = fullName.contains('/') ? fullName[fullName.lastIndexOf('/')+1..-1] : fullName
+    def name = null
+    if (fullName.endsWith('/')) name = fullName[0..-2]
+    else name = fullName.contains('/') ? fullName[fullName.lastIndexOf('/')+1..-1] : fullName
     if (!isKnownFileType(name)) {
       throw new IllegalStateException("Unknown file type: $name")
     }
@@ -112,11 +114,7 @@ class Packager {
     def fileTemp = makeTempPath(file, 'nodirectory')
     new ZipFile(file.toFile()).withCloseable { zipIn ->
       new ZipOutputStream(Files.newOutputStream(fileTemp)).withCloseable { zipOut ->
-        def entries = zipIn.entries()
-        def directoryEntry = entries.nextElement()
-        assert directoryEntry.isDirectory()
-        while (entries.hasMoreElements()) {
-          def entryIn = entries.nextElement()
+        sortedEntries(zipIn.entries()).findAll{!it.isDirectory()}.each { entryIn ->
           def nameOut = entryIn.name[entryIn.name.lastIndexOf('/')+1..-1]
           writeEntry(entryIn:entryIn, nameOut:nameOut, zipIn:zipIn, zipOut:zipOut)
         }
@@ -208,7 +206,7 @@ class Packager {
 
   List<? extends ZipEntry> sortedEntries(Enumeration<? extends ZipEntry> enumeration) {
     def entries = enumeration.toList()
-    // Every file evds with a dash or underscore, then a number
+    // Every file ends with a dash or underscore, then a number
     if (entries.every{!it.isDirectory()} && entries.every{fileNameWithoutExtension(it) ==~ /.*[_\-\#]\d+/}) {
       entries.
         // Group by prefix
@@ -228,7 +226,7 @@ class Packager {
     } else if (entries.every{!it.isDirectory()} && entries.every{fileNameWithoutExtension(it).isInteger()}) {
       entries.toSorted {fileNameWithoutExtension(it).toBigInteger()}
     } else {
-      entries.toSorted{it.name}
+      entries.toUnique{it.name}.toSorted{it.name}
     }
   }
 
