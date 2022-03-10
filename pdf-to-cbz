@@ -91,7 +91,7 @@ class Converter {
       def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.$compression")
       if (!Files.exists(targetPath)) {
         println "    Trimming ${sourcePath.fileName}"
-        execute(['convert', '-alpha', 'flatten', sourcePath.toString(), '-fuzz', '4%', '-trim', '+repage', '-resize', '2500>x2500>', '+repage', '-quality', '94', targetPath.toString()])
+        execute(['convert', '-alpha', 'flatten', sourcePath.toString(), '-fuzz', '5%', '-trim', '+repage', '-resize', '2500>x2500>', '+repage', '-quality', '94', targetPath.toString()])
       }
     }
     targetDirectory

@@ -14,30 +14,12 @@ class Combiner {
   void apply(Map opts=[:], Path parentDirectory) {
     def directories = parentDirectory.listSorted().findAll{it.isDirectory()}
     if (directories.isEmpty()) return
-    def volume = null
-    println 'Moving images'
-    directories.each { directory ->
-      if (directory.name.contains(' - Volume ')) {
-        def thisVolume = Volume.parse(directory)
-        if ((thisVolume) == null) {
-          throw new ExitException("Error parsing volume ${directory.name}")
-        }
-        volume = thisVolume
-        println "  Moving volume $volume.number"
-        clean(directory)
-        renumber(directory:directory, issue:volume.start)
-      } else {
-        clean(directory)
-        def issue = (directory.name =~ /.* - (\d{4}(?:\.\d+)?)$/)[0][1] as BigDecimal
-        renumber(directory:directory, issue:issue)
-        mergeDirectory(destination:volume.directory, source:directory)
-      }
-    }
     convertAll(directory:parentDirectory, compression:opts.compression)
   }
 
   void convert(Map opts) {
     def sourceDirectory = opts.directory
+    clean(sourceDirectory)
     println "  Converting $sourceDirectory.name"
     def compression = opts.compression
     def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-$compression")
@@ -52,7 +34,6 @@ class Combiner {
         aSourceFile.copyPermissionsTo(targetPath)
       }
     }
-    targetDirectory.eachFile{aSourceFile.copyPermissionsTo(it)}
     sourceDirectory.deleteDir()
     targetDirectory.moveTo(sourceDirectory)
   }
@@ -79,22 +60,6 @@ class Combiner {
       throw new ExitException("$out\n\n$err")
     }
   }
-
-  void mergeDirectory(Map opts) {
-    opts.source.eachFile { file ->
-      def target = opts.destination.resolve(file.name)
-      if (target.exists()) throw new ExitException("Can't create $file because it exists")
-      file.moveTo(target)
-    }
-    opts.source.delete()
-  }
-
-  void renumber(Map opts) {
-    def issue = opts.issue.zeroPad(6)
-    opts.directory.eachFileOrderedWithIndex { path, index ->
-      path.renameTo("${issue}-${(index+1).zeroPad(6)}.${path.extension}")
-    }
-  }
 }
 
 class ExitException extends Exception {
@@ -103,26 +68,11 @@ class ExitException extends Exception {
   }
 }
 
-@ToString(includeNames=true) class Volume {
-  Path directory
-  BigDecimal end
-  int number
-  BigDecimal start
-
-  static Volume parse(Path path) {
-    def match = path.name =~ /.* (\d{4}(?:\.\d+)?)-(\d{4}(?:\.\d+)?) - Volume (\d{2})/
-    if (match.size() == 1) {
-      def group = match[0]
-      return new Volume(directory:path, end:group[2] as BigDecimal, number:group[3] as Integer, start:group[1] as BigDecimal)
-    } else return null
-  }
-}
-
 BigDecimal.metaClass.zeroPad = {int amount -> new DecimalFormat("${'0'*amount}.######").format(delegate)}
 Integer.metaClass.zeroPad = {int amount -> String.format("%0${amount}d", delegate)}
 Path.metaClass.copyPermissionsTo = { Path to ->
-  GroupPrincipal group = Files.readAttributes(delegate, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
-  Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
+  GroupPrincipal group = Files.readAttributes(delegate, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group()
+  Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group)
   to.writePosixFilePermissions(delegate.readPosixFilePermissions())
 }
 Path.metaClass.createDirectories = {Files.createDirectories(delegate)}
@@ -152,7 +102,7 @@ String.metaClass.toBigDecimal = {delegate as BigDecimal}
 String.metaClass.toInt = {delegate as Integer}
 
 try {
-  def parser = new CliBuilder(usage:'combine-comic-volumes').tap {
+  def parser = new CliBuilder(usage:'convert-comic-images').tap {
     _ longOpt:'compression', args:1, defaultValue:'png', 'image compression'
   }
   def options = parser.parse(args)
