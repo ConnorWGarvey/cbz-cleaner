@@ -67,7 +67,7 @@ class Converter {
       def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.webp")
       if (!Files.exists(targetPath)) {
         println "    Trimming ${sourcePath.fileName}"
-        execute(['convert', '-fuzz', '5%', '-trim', '+repage', '-resize', '2500>x2500>', '-quality', quality, sourcePath.toString(), targetPath.toString()])
+        execute(['convert', '-fuzz', '5%', '-trim', '+repage', '-resize', '2700>x2700>', '-quality', quality, sourcePath.toString(), targetPath.toString()])
       }
     }
     targetDirectory

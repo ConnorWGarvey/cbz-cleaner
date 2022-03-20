@@ -40,6 +40,7 @@ class Converter {
   void copyPermissions(Path from, Path to) {
     GroupPrincipal group = Files.readAttributes(from, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group()
     Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group)
+    to.writePosixFilePermissions(from.readPosixFilePermissions())
   }
 
   void execute(List<String> command) {
@@ -91,7 +92,7 @@ class Converter {
       def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.$compression")
       if (!Files.exists(targetPath)) {
         println "    Trimming ${sourcePath.fileName}"
-        execute(['convert', '-alpha', 'flatten', sourcePath.toString(), '-fuzz', '5%', '-trim', '+repage', '-resize', '2500>x2500>', '+repage', '-quality', '94', targetPath.toString()])
+        execute(['convert', '-alpha', 'flatten', sourcePath.toString(), '-fuzz', '5%', '-trim', '+repage', '-resize', '2700>x2700>', '+repage', '-quality', '94', targetPath.toString()])
       }
     }
     targetDirectory
@@ -122,6 +123,9 @@ class ExitException extends Exception {
     super(message)
   }
 }
+
+Path.metaClass.readPosixFilePermissions = {Files.getPosixFilePermissions(delegate)}
+Path.metaClass.writePosixFilePermissions = {permissions -> Files.setPosixFilePermissions(delegate, permissions)}
 
 try {
   def parser = new CliBuilder(usage:'pdf-to-cbz').tap {

@@ -44,11 +44,15 @@ class Combiner {
     targetDirectory.createDirectories()
     sourceDirectory.copyPermissionsTo(targetDirectory)
     def aSourceFile = sourceDirectory.list()[0]
-    sourceDirectory.eachFile { sourcePath ->
-      def targetPath = targetDirectory.resolve("${sourcePath.nameWithoutExtension}.$compression")
+    def sourcePaths = Files.list(sourceDirectory).toList().toSorted()
+    def digits = sourcePaths.size().toString().length()
+    sourcePaths.eachWithIndex { sourcePath, index ->
+      def formattedIndex = String.format("%0${digits}d", index+1)
+      def targetFileName = "${formattedIndex}.$compression"
+      def targetPath = targetDirectory.resolve(targetFileName)
       if (!targetPath.exists()) {
-        println "    Converting ${sourcePath.fileName} to $compression"
-        execute(['convert', sourcePath.toString(), targetPath.toString()])
+        println "    Trimming ${sourcePath.fileName} to $targetFileName"
+        execute(['convert', '-fuzz', '5%', '-trim', sourcePath.toString(), targetPath.toString()])
         aSourceFile.copyPermissionsTo(targetPath)
       }
     }
