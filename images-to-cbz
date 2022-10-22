@@ -14,7 +14,7 @@ import java.util.zip.ZipOutputStream
 class Converter {
   void apply(Map opts=[:], Path file) {
     def name = file.fileName.toString()
-    def trimmed = trimAll(file, quality:opts.quality)
+    def trimmed = trimAll(file, quality:opts.quality, trimFuzzFactor:opts.trimFuzzFactor)
     def cbz = Paths.get("${name}.cbz").toAbsolutePath()
     writeCbz(cbz, trimmed)
     copyPermissions(file, cbz)
@@ -25,7 +25,7 @@ class Converter {
   void applyAll(Map opts=[:], Path directory) {
     directory.eachDir { file ->
       println "Converting ${file.fileName}"
-      apply(file, delete:opts.delete, quality:opts.quality)
+      apply(file, delete:opts.delete, quality:opts.quality, trimFuzzFactor:opts.trimFuzzFactor)
     }
   }
 
@@ -67,7 +67,7 @@ class Converter {
       def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.webp")
       if (!Files.exists(targetPath)) {
         println "    Trimming ${sourcePath.fileName}"
-        execute(['convert', '-fuzz', '5%', '-trim', '+repage', '-resize', '2700>x2700>', '-quality', quality, sourcePath.toString(), targetPath.toString()])
+        execute(['convert', '-fuzz', "${opts.trimFuzzFactor}%", '-trim', '+repage', '-resize', '2700>x2700>', '-quality', quality, sourcePath.toString(), targetPath.toString()])
       }
     }
     targetDirectory
@@ -100,9 +100,10 @@ try {
   def parser = new CliBuilder(usage:'images-to-cbz').tap {
     _ longOpt:'delete', 'Delete the image directory after conversion'
     _ longOpt:'quality', args:1, defaultValue:'94', 'Compressed image quality'
+    _ longOpt:'trim-fuzz-factor', args:1, defaultValue:'5', argName:'trimFuzzFactor', 'When trimming edges, how eager to be'
   }
   def options = parser.parse(args)
-  new Converter().applyAll(Paths.get('').toAbsolutePath(), delete:options.delete, quality:options.quality)
+  new Converter().applyAll(Paths.get('').toAbsolutePath(), delete:options.delete, quality:options.quality, trimFuzzFactor:options['trim-fuzz-factor'])
 } catch (ExitException e) {
   println e.message
   System.exit(1)

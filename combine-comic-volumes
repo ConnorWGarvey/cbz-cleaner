@@ -14,24 +14,26 @@ class Combiner {
   void apply(Map opts=[:], Path parentDirectory) {
     def directories = parentDirectory.listSorted().findAll{it.isDirectory()}
     if (directories.isEmpty()) return
-    def volume = null
-    println 'Moving images'
-    directories.each { directory ->
-      if (directory.name.contains(' - Volume ')) {
-        def thisVolume = Volume.parse(directory)
-        if ((thisVolume) == null) {
-          throw new ExitException("Error parsing volume ${directory.name}")
-        }
-        volume = thisVolume
-        println "  Moving volume $volume.number"
-        clean(directory)
-        renumber(directory:directory, issue:volume.start)
-      } else {
-        clean(directory)
-        def issue = (directory.name =~ /.* - (\d{4}(?:\.\d+)?)$/)[0][1] as BigDecimal
-        renumber(directory:directory, issue:issue)
-        mergeDirectory(destination:volume.directory, source:directory)
+    def volumeList = directories.findAll{it.name.contains(' - Volume ')}.collect{Volume.parse(it)}.findAll{it}
+    volumeList.forEach { volume ->
+      if ((volume) == null) {
+        throw new ExitException("Error parsing volume ${directory.name}")
       }
+    }
+    def volumes = volumeList.groupBy{it.series}
+    println 'Moving images'
+    directories.findAll{!it.name.contains(' - Volume ')}.each { directory ->
+      clean(directory)
+      def match = (directory.name =~ /(.*) - (\d{4}(?:\.\d+)?)$/)[0]
+      def series = match[1]
+      def issue = match[2] as BigDecimal
+      def volume = volumes[series].find{it.hasIssue(issue)}
+      if (volume == null) {
+        throw new ExitException("Couldn't find a volume for ${directory.name} : $series from $volumes")
+      }
+      println "  Moving $issue from $series"
+      renumber(directory:directory, issue:issue)
+      mergeDirectory(destination:volume.directory, source:directory)
     }
     convertAll(directory:parentDirectory, compression:opts.compression)
   }
@@ -111,13 +113,18 @@ class ExitException extends Exception {
   Path directory
   BigDecimal end
   int number
+  String series
   BigDecimal start
 
+  boolean hasIssue(BigDecimal issue) {
+    issue >= start && issue <= end
+  }
+
   static Volume parse(Path path) {
-    def match = path.name =~ /.* (\d{4}(?:\.\d+)?)-(\d{4}(?:\.\d+)?) - Volume (\d{2})/
+    def match = path.name =~ /(.*) - (\d{4}(?:\.\d+)?)-(\d{4}(?:\.\d+)?) - Volume (\d{2})/
     if (match.size() == 1) {
       def group = match[0]
-      return new Volume(directory:path, end:group[2] as BigDecimal, number:group[3] as Integer, start:group[1] as BigDecimal)
+      return new Volume(directory:path, end:group[3] as BigDecimal, number:group[4] as Integer, series:group[1], start:group[2] as BigDecimal)
     } else return null
   }
 }

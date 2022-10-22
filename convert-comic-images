@@ -29,8 +29,8 @@ class Combiner {
     sourceDirectory.eachFile { sourcePath ->
       def targetPath = targetDirectory.resolve("${sourcePath.nameWithoutExtension}.$compression")
       if (!targetPath.exists()) {
-        println "    Converting ${sourcePath.fileName} to $compression"
-        execute(['convert', sourcePath.toString(), targetPath.toString()])
+        println "    Trimming ${sourcePath.fileName} to $compression"
+        execute(['convert', '-fuzz', '5%', '-trim', sourcePath.toString(), targetPath.toString()])
         aSourceFile.copyPermissionsTo(targetPath)
       }
     }

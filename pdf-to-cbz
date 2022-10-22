@@ -16,7 +16,7 @@ class Converter {
   void apply(Map opts=[:], Path file) {
     def extracted = extractImages(file)
     def name = fileNameWithoutExtension(file)
-    def trimmed = trimAll(extracted, compression:opts.compression)
+    def trimmed = trimAll(extracted, compression:opts.compression, trim:opts.trim)
     def cbz = Paths.get("${name}.cbz").toAbsolutePath()
     writeCbz(cbz, trimmed)
     copyPermissions(file, cbz)
@@ -31,7 +31,7 @@ class Converter {
       def file = firstWithExtension(directory, 'pdf', exclude:done)
       if (file) {
         println "Converting ${file.fileName}"
-        apply(file, compression:opts.compression, delete:opts.delete)
+        apply(file, compression:opts.compression, delete:opts.delete, trim:opts.trim)
       }
       done << file.toAbsolutePath()
     } while (firstWithExtension(directory, 'pdf', exclude:done))
@@ -92,7 +92,10 @@ class Converter {
       def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.$compression")
       if (!Files.exists(targetPath)) {
         println "    Trimming ${sourcePath.fileName}"
-        execute(['convert', '-alpha', 'flatten', sourcePath.toString(), '-fuzz', '5%', '-trim', '+repage', '-resize', '2700>x2700>', '+repage', '-quality', '94', targetPath.toString()])
+        def command = ['convert', '-alpha', 'flatten', sourcePath.toString()]
+        if (opts.trim) command += ['-fuzz', '5%', '-trim', '+repage']
+        command += ['-resize', '2700>x2700>', '+repage', '-quality', '94', targetPath.toString()]
+        execute(command)
       }
     }
     targetDirectory
@@ -131,9 +134,10 @@ try {
   def parser = new CliBuilder(usage:'pdf-to-cbz').tap {
     _ longOpt:'delete', 'Delete the PDF file after conversion'
     _ longOpt:'compression', args:1, defaultValue:'webp', 'The type of image compression to use in the cbz'
+    _ longOpt:'no-trim', 'disable trimming'
   }
   def options = parser.parse(args)
-  new Converter().applyAll(Paths.get(''), compression:options.compression, delete:options.delete)
+  new Converter().applyAll(Paths.get(''), compression:options.compression, delete:options.delete, trim:!options['no-trim'])
 } catch (ExitException e) {
   println e.message
   System.exit(1)
