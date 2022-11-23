@@ -22,7 +22,7 @@ class Combiner {
     }
     def volumes = volumeList.groupBy{it.series}
     println 'Moving images'
-    directories.findAll{!it.name.contains(' - Volume ')}.each { directory ->
+    directories.findAll{!it.name.contains(' - Volume ') && it.hasFiles()}.each { directory ->
       clean(directory)
       def match = (directory.name =~ /(.*) - (\d{4}(?:\.\d+)?)$/)[0]
       def series = match[1]
@@ -40,6 +40,10 @@ class Combiner {
 
   void convert(Map opts) {
     def sourceDirectory = opts.directory
+    if (!sourceDirectory.hasFiles()) {
+      println "  Not converting $sourceDirectory.name because it does't contain any files"
+      return
+    }
     println "  Converting $sourceDirectory.name"
     def compression = opts.compression
     def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-$compression")
@@ -54,7 +58,7 @@ class Combiner {
       def targetPath = targetDirectory.resolve(targetFileName)
       if (!targetPath.exists()) {
         println "    Trimming ${sourcePath.fileName} to $targetFileName"
-        execute(['convert', '-fuzz', '5%', '-trim', sourcePath.toString(), targetPath.toString()])
+        execute(['convert', '-fuzz', '7%', '-trim', sourcePath.toString(), targetPath.toString()])
         aSourceFile.copyPermissionsTo(targetPath)
       }
     }
@@ -149,8 +153,11 @@ Path.metaClass.getName = {
   name[name.lastIndexOf('/')+1..-1]
 }
 Path.metaClass.getNameWithoutExtension = {delegate.name[0..delegate.name.lastIndexOf('.')-1]}
+Path.metaClass.hasFiles = {delegate.list().any{it.isFile()}}
 Path.metaClass.isDirectory = {Files.isDirectory(delegate)}
+Path.metaClass.isFile = {Files.isRegularFile(delegate)}
 Path.metaClass.list = {Files.list(delegate).toList()}
+Path.metaClass.listFiles = {delegate.list().filter{it.isFile()}}
 Path.metaClass.listSorted = {delegate.list().toSorted()}
 Path.metaClass.moveTo = {Path destination -> Files.move(delegate, destination)}
 Path.metaClass.readPosixFilePermissions = {Files.getPosixFilePermissions(delegate)}

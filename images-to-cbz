@@ -100,7 +100,7 @@ try {
   def parser = new CliBuilder(usage:'images-to-cbz').tap {
     _ longOpt:'delete', 'Delete the image directory after conversion'
     _ longOpt:'quality', args:1, defaultValue:'94', 'Compressed image quality'
-    _ longOpt:'trim-fuzz-factor', args:1, defaultValue:'5', argName:'trimFuzzFactor', 'When trimming edges, how eager to be'
+    _ longOpt:'trim-fuzz-factor', args:1, defaultValue:'7', argName:'trimFuzzFactor', 'When trimming edges, how eager to be'
   }
   def options = parser.parse(args)
   new Converter().applyAll(Paths.get('').toAbsolutePath(), delete:options.delete, quality:options.quality, trimFuzzFactor:options['trim-fuzz-factor'])

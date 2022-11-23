@@ -16,7 +16,7 @@ class Converter {
   void apply(Map opts=[:], Path file) {
     def extracted = extractImages(file)
     def name = fileNameWithoutExtension(file)
-    def trimmed = trimAll(extracted, compression:opts.compression, trim:opts.trim)
+    def trimmed = trimAll(extracted, compression:opts.compression, trimCount:opts.trimCount)
     def cbz = Paths.get("${name}.cbz").toAbsolutePath()
     writeCbz(cbz, trimmed)
     copyPermissions(file, cbz)
@@ -28,12 +28,15 @@ class Converter {
   void applyAll(Map opts=[:], Path directory) {
     def done = [] as Set
     do {
-      def file = firstWithExtension(directory, 'pdf', exclude:done)
+      def file = firstWithExtension(directory, 'pdf', exclude:done)?.toAbsolutePath()
       if (file) {
-        println "Converting ${file.fileName}"
-        apply(file, compression:opts.compression, delete:opts.delete, trim:opts.trim)
+        if (file.withExtension('cbz').exists()) println "Skipping existing ${file.fileName}"
+        else {
+          println "Converting ${file.fileName}"
+          apply(file, compression:opts.compression, delete:opts.delete, trimCount:opts.trimCount)
+        }
       }
-      done << file.toAbsolutePath()
+      if (file) done << file.toAbsolutePath()
     } while (firstWithExtension(directory, 'pdf', exclude:done))
   }
 
@@ -83,21 +86,51 @@ class Converter {
     Files.list(directory).toList().find { (fileExtension(it) == extension) && (it.toAbsolutePath() !in exclude) }
   }
 
+  List<String> convertCommand(Map opts) {
+    def target = opts.target
+    def compressionOptions = []
+    if (opts.target.extension == 'webp') {
+      def quality = opts.quality
+      if (quality == 'lossless') compressionOptions = ['-define', 'webp:lossless=true']
+      else compressionOptions = ['-quality', "${quality}%"]
+    }
+    ['convert', '-alpha', 'flatten', opts.source.toString(), '-fuzz', '7%', '-trim', '+repage', '-resize', '2700>x2700>', '+repage'] + compressionOptions + [target.toString()]
+  }
+
   Path trimAll(Map opts=[:], Path sourceDirectory) {
+    def trimCount = opts.trimCount
+    assert trimCount != null
+    def actionName = trimCount > 0 ? 'Trimming' : 'Resizing'
     def compression = opts.compression ?: 'webp'
-    println "  Trimming images in ${sourceDirectory.fileName}"
-    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-trimmed")
-    Files.createDirectories(targetDirectory)
-    sourceDirectory.eachFile { sourcePath ->
+    println "  $actionName images in ${sourceDirectory.fileName}"
+    def readFromDirectory = sourceDirectory
+    def trimDirectories = []
+    for (def i = 1; i < trimCount; ++i) {
+      println("    Extra trim $i")
+      def iteration = i-1
+      def trimDirectory = sourceDirectory.createSiblingDirectoryWithAppendix("trim-$i")
+      readFromDirectory.eachFile { sourcePath ->
+        def trimPath = trimDirectory.resolve(sourcePath.withExtension('webp').name)
+        println("      Trimming ${sourcePath.name}")
+        def command = convertCommand(source:sourcePath, target:trimPath, quality:'lossless')
+        //println("        $command")
+        execute(command)
+      }
+      trimDirectories += trimDirectory
+      readFromDirectory = trimDirectory
+    }
+    def targetDirectory = sourceDirectory.createSiblingDirectoryWithAppendix('trimmed')
+    println("    $actionName")
+    readFromDirectory.eachFile { sourcePath ->
       def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.$compression")
       if (!Files.exists(targetPath)) {
-        println "    Trimming ${sourcePath.fileName}"
-        def command = ['convert', '-alpha', 'flatten', sourcePath.toString()]
-        if (opts.trim) command += ['-fuzz', '5%', '-trim', '+repage']
-        command += ['-resize', '2700>x2700>', '+repage', '-quality', '94', targetPath.toString()]
+        println "      $actionName ${sourcePath.fileName}"
+        def command = convertCommand(source:sourcePath, target:targetPath, quality:94)
+        //println("        $command")
         execute(command)
       }
     }
+    trimDirectories.each{it.deleteDir()}
     targetDirectory
   }
 
@@ -127,17 +160,35 @@ class ExitException extends Exception {
   }
 }
 
+/** Creates a sibling directory with a dash-separated name appended */
+Path.metaClass.createDirectories = {Files.createDirectories(delegate)}
+Path.metaClass.createSiblingDirectoryWithAppendix = {appendix -> delegate.siblingWithAppendix(appendix).createDirectories()}
+Path.metaClass.exists = {Files.exists(delegate)}
+Path.metaClass.getExtension = {delegate.name[delegate.name.lastIndexOf('.')+1..-1]}
+Path.metaClass.getNameWithoutExtension = {delegate.name[0..delegate.name.lastIndexOf('.')-1]}
+Path.metaClass.withExtension = {extension -> delegate.toAbsolutePath().parent.resolve("${delegate.nameWithoutExtension}.$extension")}
+Path.metaClass.getName = {
+  def name = delegate.toString()
+  name[name.lastIndexOf('/')+1..-1]
+}
 Path.metaClass.readPosixFilePermissions = {Files.getPosixFilePermissions(delegate)}
+/** A sibling with a dash-separated name appended */
+Path.metaClass.siblingWithAppendix = {appendix -> delegate.parent.resolve("${delegate.fileName}-${appendix}")}
 Path.metaClass.writePosixFilePermissions = {permissions -> Files.setPosixFilePermissions(delegate, permissions)}
 
 try {
   def parser = new CliBuilder(usage:'pdf-to-cbz').tap {
+    _ longOpt:'compression', args:1, defaultValue:'png', 'The type of image compression to use in the cbz'
     _ longOpt:'delete', 'Delete the PDF file after conversion'
-    _ longOpt:'compression', args:1, defaultValue:'webp', 'The type of image compression to use in the cbz'
-    _ longOpt:'no-trim', 'disable trimming'
+    h(longOpt:'help', 'Show this message and exit')
+    _ longOpt:'trims', args:1, defaultValue:'2', 'number of trims to apply'
   }
   def options = parser.parse(args)
-  new Converter().applyAll(Paths.get(''), compression:options.compression, delete:options.delete, trim:!options['no-trim'])
+  if (options.help) {
+    parser.usage()
+    System.exit(0)
+  }
+  new Converter().applyAll(Paths.get(''), compression:options.compression, delete:options.delete, trimCount:options.trims as Integer)
 } catch (ExitException e) {
   println e.message
   System.exit(1)
