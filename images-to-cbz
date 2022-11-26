@@ -1,111 +1,127 @@
-#!/usr/bin/env groovy
+#!/usr/bin/env ruby
 
-import java.nio.file.Files
-import java.nio.file.LinkOption
-import java.nio.file.Path
-import java.nio.file.Paths
-import java.nio.file.attribute.GroupPrincipal
-import java.nio.file.attribute.PosixFileAttributes
-import java.nio.file.attribute.PosixFileAttributeView
-import java.util.zip.ZipEntry
-import java.util.zip.ZipFile
-import java.util.zip.ZipOutputStream
+require_relative 'lib/shell'
+require 'fileutils'
+require 'pathname'
+require 'slop'
+require 'zip'
 
-class Converter {
-  void apply(Map opts=[:], Path file) {
-    def name = file.fileName.toString()
-    def trimmed = trimAll(file, quality:opts.quality, trimFuzzFactor:opts.trimFuzzFactor)
-    def cbz = Paths.get("${name}.cbz").toAbsolutePath()
-    writeCbz(cbz, trimmed)
-    copyPermissions(file, cbz)
-    trimmed.deleteDir()
-    if (opts.delete) file.deleteDir()
-  }
+def package(delete:, directory:, quality:, trim_fuzz_factor:)
+  name = directory.basename()
+  trimmed = trim_all(directory:directory, quality:quality, trim_fuzz_factor:trim_fuzz_factor)
+  cbz = directory.parent.child("#{name}.cbz")
+  write_cbz(source_directory:trimmed, target:cbz)
+  directory.copy_permissions_to(cbz)
+  trimmed.delete_directory
+  directory.delete_directory if delete
+end
 
-  void applyAll(Map opts=[:], Path directory) {
-    directory.eachDir { file ->
-      println "Converting ${file.fileName}"
-      apply(file, delete:opts.delete, quality:opts.quality, trimFuzzFactor:opts.trimFuzzFactor)
-    }
-  }
+def package_all(delete:, directory:, quality:, trim_fuzz_factor:)
+  directory.each_directory do |subdirectory|
+    puts("Converting #{subdirectory.basename}")
+    package(directory:subdirectory, delete:delete, quality:quality, trim_fuzz_factor:trim_fuzz_factor)
+  end
+end
 
-  void copyPermissions(Path from, Path to) {
-    GroupPrincipal group = Files.readAttributes(from, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
-    Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
-  }
 
-  void execute(List<String> command) {
-    def proc = command.execute()
-    def out = proc.in.text
-    def err = proc.err.text
-    proc.waitFor()
-    def exitValue = proc.exitValue()
-    if (exitValue != 0) {
-      throw new ExitException("$out\n\n$err")
-    }
-  }
+def execute(command)
+  proc = command.execute()
+  out = proc.in.text
+  err = proc.err.text
+  proc.waitFor()
+  exitValue = proc.exitValue()
+  if (exitValue != 0)
+    throw ExitException.new("#{out}\n\n#{err}")
+  end
+end
 
-  String fileExtension(Path path) {
-    def name = path.fileName.toString()
-    name[name.lastIndexOf('.')+1..-1]
-  }
+def fileExtension(path)
+  def name = path.fileName.toString()
+  name[name.lastIndexOf('.')+1..-1]
+end
 
-  String fileNameWithoutExtension(Path path) {
-    fileNameWithoutExtension(path.fileName.toString())
-  }
+def fileNameWithoutExtension(path)
+  fileNameWithoutExtension(path.fileName.toString())
+end
 
-  String fileNameWithoutExtension(String name) {
-    name[0..name.lastIndexOf('.')-1]
-  }
+def fileNameWithoutExtension(name)
+  name[0..name.lastIndexOf('.')-1]
+end
 
-  Path trimAll(Map opts=[:], Path sourceDirectory) {
-    println '  Trimming images'
-    def quality = opts.quality ?: '94'
-    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-trimmed")
-    Files.createDirectories(targetDirectory)
-    sourceDirectory.eachFile { sourcePath ->
-      def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.webp")
-      if (!Files.exists(targetPath)) {
-        println "    Trimming ${sourcePath.fileName}"
-        execute(['convert', '-fuzz', "${opts.trimFuzzFactor}%", '-trim', '+repage', '-resize', '2700>x2700>', '-quality', quality, sourcePath.toString(), targetPath.toString()])
-      }
-    }
-    targetDirectory
-  }
+def trim_all(directory:, quality:, trim_fuzz_factor:)
+  puts('  Trimming images')
+  target_directory = directory.parent.child("#{directory.basename}-trimmed").make_directory
+  directory.each_file do |source_path|
+    target_path = target_directory.child("#{source_path.basename_without_extension}.webp")
+    if !target_path.exist?
+      puts "    Trimming #{source_path.basename}"
+      begin
+        Shell.run(['convert', '-fuzz', "#{trim_fuzz_factor}%", '-trim', '+repage', '-resize', '2700>x2700>', '-quality', quality.to_s, source_path.to_s, target_path.to_s])
+      rescue ShellError => e
+        raise ExitException(e.message)
+      end
+    end
+  end
+  target_directory
+end
 
-  void writeCbz(Path target, Path sourceDirectory) {
-    println '  Compressing the CBZ'
-    assert Files.isDirectory(sourceDirectory)
-    new ZipOutputStream(Files.newOutputStream(target)).withCloseable { zipOut ->
-      Files.list(sourceDirectory).toList().toSorted().each { sourcePath ->
-        def entryOut = new ZipEntry(sourcePath.fileName.toString())
-        zipOut.putNextEntry(entryOut)
-        Files.newInputStream(sourcePath).withCloseable { content ->
-          content.transferTo(zipOut)
-        }
-        zipOut.closeEntry()
-      }
-      zipOut.finish()
-    }
-  }
-}
+def write_cbz(source_directory:, target:)
+  puts('  Compressing the CBZ')
+  Zip::File.open(target, create:true) do |zip|
+    source_directory.each_file do |source_path|
+      zip.get_output_stream(source_path.basename) do |writer|
+        source_path.open do |reader|
+          while block = reader.read(1024**2)
+            writer << block
+          end
+        end
+      end
+    end
+  end
+end
 
-class ExitException extends Exception {
-  public ExitException(String message) {
-    super(message)
-  }
-}
+class ExitException < StandardError
+end
 
-try {
-  def parser = new CliBuilder(usage:'images-to-cbz').tap {
-    _ longOpt:'delete', 'Delete the image directory after conversion'
-    _ longOpt:'quality', args:1, defaultValue:'94', 'Compressed image quality'
-    _ longOpt:'trim-fuzz-factor', args:1, defaultValue:'7', argName:'trimFuzzFactor', 'When trimming edges, how eager to be'
-  }
-  def options = parser.parse(args)
-  new Converter().applyAll(Paths.get('').toAbsolutePath(), delete:options.delete, quality:options.quality, trimFuzzFactor:options['trim-fuzz-factor'])
-} catch (ExitException e) {
-  println e.message
-  System.exit(1)
-}
+module PathnameFunctions
+  def absolute() = self.realpath
+  def basename_without_extension() = self.basename('.*')
+  def child(name) = self + name
+
+  def copy_permissions_to(to)
+    user = nil # must be root to set user
+    group = self.stat.gid # group number
+    to.chown(user, group)
+  end
+
+  def delete_directory() = FileUtils.rm_r(self)
+
+  def each_directory
+    each_child do |f|
+      yield f if f.directory?
+    end
+  end
+
+  def each_file
+    each_child do |f|
+      yield f if f.file?
+    end
+  end
+
+  def make_directory()
+    Dir.mkdir(self)
+    self
+  end
+  def make_directories() = FileUtils.mkdir_p(self)
+  def parent = self.dirname
+end
+Pathname.class_eval{include PathnameFunctions}
+
+options = Slop.parse do |o|
+  o.bool '--delete', 'Delete the image directory after conversion'
+  o.integer '--quality', 'Compressed image quality', default:94
+  o.integer '--trim-fuzz-factor', 'When trimming edges, how eager to be', default:7
+end
+
+package_all(delete:options[:delete], directory:Pathname.new('.'), quality:options[:quality], trim_fuzz_factor:options[:trim_fuzz_factor])
 

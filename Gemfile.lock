@@ -1,0 +1,15 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rubyzip (2.3.2)
+    slop (4.9.3)
+
+PLATFORMS
+  x86_64-linux
+
+DEPENDENCIES
+  rubyzip
+  slop
+
+BUNDLED WITH
+   2.3.7
