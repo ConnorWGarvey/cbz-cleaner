@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 
+require_relative 'lib/pathname_extensions'
 require_relative 'lib/shell'
 require 'fileutils'
 require 'pathname'
@@ -10,7 +11,7 @@ def package(delete:, directory:, quality:, trim_fuzz_factor:)
   name = directory.basename()
   trimmed = trim_all(directory:directory, quality:quality, trim_fuzz_factor:trim_fuzz_factor)
   cbz = directory.parent.child("#{name}.cbz")
-  write_cbz(source_directory:trimmed, target:cbz)
+  trimmed.copy_directory_to_zip(cbz)
   directory.copy_permissions_to(cbz)
   trimmed.delete_directory
   directory.delete_directory if delete
@@ -21,31 +22,6 @@ def package_all(delete:, directory:, quality:, trim_fuzz_factor:)
     puts("Converting #{subdirectory.basename}")
     package(directory:subdirectory, delete:delete, quality:quality, trim_fuzz_factor:trim_fuzz_factor)
   end
-end
-
-
-def execute(command)
-  proc = command.execute()
-  out = proc.in.text
-  err = proc.err.text
-  proc.waitFor()
-  exitValue = proc.exitValue()
-  if (exitValue != 0)
-    throw ExitException.new("#{out}\n\n#{err}")
-  end
-end
-
-def fileExtension(path)
-  def name = path.fileName.toString()
-  name[name.lastIndexOf('.')+1..-1]
-end
-
-def fileNameWithoutExtension(path)
-  fileNameWithoutExtension(path.fileName.toString())
-end
-
-def fileNameWithoutExtension(name)
-  name[0..name.lastIndexOf('.')-1]
 end
 
 def trim_all(directory:, quality:, trim_fuzz_factor:)
@@ -65,57 +41,8 @@ def trim_all(directory:, quality:, trim_fuzz_factor:)
   target_directory
 end
 
-def write_cbz(source_directory:, target:)
-  puts('  Compressing the CBZ')
-  Zip::File.open(target, create:true) do |zip|
-    source_directory.each_file do |source_path|
-      zip.get_output_stream(source_path.basename) do |writer|
-        source_path.open do |reader|
-          while block = reader.read(1024**2)
-            writer << block
-          end
-        end
-      end
-    end
-  end
-end
-
 class ExitException < StandardError
 end
-
-module PathnameFunctions
-  def absolute() = self.realpath
-  def basename_without_extension() = self.basename('.*')
-  def child(name) = self + name
-
-  def copy_permissions_to(to)
-    user = nil # must be root to set user
-    group = self.stat.gid # group number
-    to.chown(user, group)
-  end
-
-  def delete_directory() = FileUtils.rm_r(self)
-
-  def each_directory
-    each_child do |f|
-      yield f if f.directory?
-    end
-  end
-
-  def each_file
-    each_child do |f|
-      yield f if f.file?
-    end
-  end
-
-  def make_directory()
-    Dir.mkdir(self)
-    self
-  end
-  def make_directories() = FileUtils.mkdir_p(self)
-  def parent = self.dirname
-end
-Pathname.class_eval{include PathnameFunctions}
 
 options = Slop.parse do |o|
   o.bool '--delete', 'Delete the image directory after conversion'
