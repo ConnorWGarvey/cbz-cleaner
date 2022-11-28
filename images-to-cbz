@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 
+require_relative 'lib/cli'
 require_relative 'lib/pathname_extensions'
 require_relative 'lib/shell'
 require 'fileutils'
@@ -39,9 +40,6 @@ def trim_all(directory:, quality:, trim_fuzz_factor:)
     end
   end
   target_directory
-end
-
-class ExitException < StandardError
 end
 
 options = Slop.parse do |o|

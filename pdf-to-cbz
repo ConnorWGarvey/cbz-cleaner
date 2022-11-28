@@ -1,196 +1,94 @@
-#!/usr/bin/env groovy
+#!/usr/bin/env ruby
 
-import groovy.cli.commons.CliBuilder
-import java.nio.file.Files
-import java.nio.file.LinkOption
-import java.nio.file.Path
-import java.nio.file.Paths
-import java.nio.file.attribute.GroupPrincipal
-import java.nio.file.attribute.PosixFileAttributes
-import java.nio.file.attribute.PosixFileAttributeView
-import java.util.zip.ZipEntry
-import java.util.zip.ZipFile
-import java.util.zip.ZipOutputStream
+require_relative 'lib/cli'
+require_relative 'lib/magick'
+require_relative 'lib/pathname_extensions'
+require_relative 'lib/shell'
+require 'set'
+require 'slop'
 
-class Converter {
-  void apply(Map opts=[:], Path file) {
-    def extracted = extractImages(file)
-    def name = fileNameWithoutExtension(file)
-    def trimmed = trimAll(extracted, compression:opts.compression, trimCount:opts.trimCount)
-    def cbz = Paths.get("${name}.cbz").toAbsolutePath()
-    writeCbz(cbz, trimmed)
-    copyPermissions(file, cbz)
-    extracted.deleteDir()
-    trimmed.deleteDir()
-    if (opts.delete) Files.delete(file)
-  }
+def convert(compression:, delete:, file:, trim_count:)
+  extracted = extract_images(file)
+  trimmed = trim_all(compression:compression, directory:extracted, trim_count:trim_count)
+  cbz = file.with_extension('cbz')
+  trimmed.copy_directory_to_zip(cbz, naming: :incrementing)
+  file.copy_permissions_to(cbz)
+  extracted.delete_directory
+  trimmed.delete_directory
+  file.delete if delete
+end
 
-  void applyAll(Map opts=[:], Path directory) {
-    def done = [] as Set
-    do {
-      def file = firstWithExtension(directory, 'pdf', exclude:done)?.toAbsolutePath()
-      if (file) {
-        if (file.withExtension('cbz').exists()) println "Skipping existing ${file.fileName}"
-        else {
-          println "Converting ${file.fileName}"
-          apply(file, compression:opts.compression, delete:opts.delete, trimCount:opts.trimCount)
-        }
-      }
-      if (file) done << file.toAbsolutePath()
-    } while (firstWithExtension(directory, 'pdf', exclude:done))
-  }
+def convert_all(compression:, delete:, directory:, trim_count:)
+  done = Set.new
+  while file = directory.children_with_extension('pdf', exclude:done).first&.absolute
+    if file.with_extension('cbz').exist?
+      puts("Skipping existing #{file.basename}")
+    else
+      puts("Converting #{file.basename}")
+      convert(compression:compression, delete:delete, file:file, trim_count:trim_count)
+    end
+    done << file
+  end
+end
 
-  void copyPermissions(Path from, Path to) {
-    GroupPrincipal group = Files.readAttributes(from, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group()
-    Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group)
-    to.writePosixFilePermissions(from.readPosixFilePermissions())
-  }
+def extract_images(path)
+  puts("  Extracting images from #{path.basename}")
+  name = "#{path.basename_without_extension}-extracted"
+  target_directory = path.sibling(name).make_directory
+  if target_directory.directory_is_empty?
+    Shell.run(['gs', '-dNOPAUSE' , '-dBATCH', '-sDEVICE=png16m', "-sOutputFile=\"#{target_directory.absolute}/%05d.png\"", '-r600', path.absolute.to_s])
+  end
+  target_directory
+end
 
-  void execute(List<String> command) {
-    def proc = command.execute()
-    def out = proc.in.text
-    def err = proc.err.text
-    proc.waitFor()
-    def exitValue = proc.exitValue()
-    if (exitValue != 0) {
-      throw new ExitException("$out\n\n$err")
-    }
-  }
+def trim_all(compression:, directory:, trim_count:)
+  source_directory = directory
+  action_name = trim_count > 0 ? 'Trimming' : 'Resizing'
+  compression ||= 'webp'
+  puts("  #{action_name} images in #{directory.basename}")
+  read_from_directory = directory
+  trim_directories = []
+  begin
+    for i in 1..trim_count
+      puts("    Extra trim #{i}")
+      iteration = i-1
+      trim_directory = directory.create_sibling_directory_with_appendix("-trim-#{i}")
+      read_from_directory.each_file do |source_path|
+        trim_path = trim_directory.child(source_path.with_extension('webp').basename)
+        puts("      Trimming #{source_path.basename} -> #{trim_path.extension}")
+        Magick.convert(quality: :lossless, source:source_path, target:trim_path)
+      end
+      trim_directories << trim_directory
+      read_from_directory = trim_directory
+    end
+    target_directory = source_directory.create_sibling_directory_with_appendix('-trimmed')
+    puts("    #{action_name}")
+    read_from_directory.each_file do |source_path|
+      target_path = target_directory.child("#{source_path.basename_without_extension}.#{compression}")
+      if !target_path.exist?
+        puts("      #{action_name} #{source_path.basename} -> #{target_path.extension}")
+        Magick.convert(quality:94, source:source_path, target:target_path)
+      end
+    end
+  ensure
+    trim_directories.each do |d|
+      begin
+        d.delete_directory
+      rescue
+      end
+    end
+  end
+  target_directory
+end
 
-  Path extractImages(Path path) {
-    println "  Extracting images from ${path.fileName}"
-    def name = "${fileNameWithoutExtension(path)}-extracted"
-    def targetDirectory = Paths.get(name).toAbsolutePath()
-    Files.createDirectories(targetDirectory)
-    if (Files.list(targetDirectory).toList().isEmpty()) {
-      execute(['gs', '-dNOPAUSE' , '-dBATCH', '-sDEVICE=png16m', "-sOutputFile=\"${targetDirectory.toString()}/%05d.png\"", '-r600', path.fileName.toString()])
-    }
-    targetDirectory
-  }
-
-  String fileExtension(Path path) {
-    def name = path.fileName.toString()
-    name[name.lastIndexOf('.')+1..-1]
-  }
-
-  String fileNameWithoutExtension(Path path) {
-    fileNameWithoutExtension(path.fileName.toString())
-  }
-
-  String fileNameWithoutExtension(String name) {
-    name[0..name.lastIndexOf('.')-1]
-  }
-
-  Path firstWithExtension(Map opts=[:], Path directory, String extension) {
-    def exclude = opts.exclude ?: []
-    Files.list(directory).toList().find { (fileExtension(it) == extension) && (it.toAbsolutePath() !in exclude) }
-  }
-
-  List<String> convertCommand(Map opts) {
-    def target = opts.target
-    def compressionOptions = []
-    if (opts.target.extension == 'webp') {
-      def quality = opts.quality
-      if (quality == 'lossless') compressionOptions = ['-define', 'webp:lossless=true']
-      else compressionOptions = ['-quality', "${quality}%"]
-    }
-    ['convert', '-alpha', 'flatten', opts.source.toString(), '-fuzz', '7%', '-trim', '+repage', '-resize', '2700>x2700>', '+repage'] + compressionOptions + [target.toString()]
-  }
-
-  Path trimAll(Map opts=[:], Path sourceDirectory) {
-    def trimCount = opts.trimCount
-    assert trimCount != null
-    def actionName = trimCount > 0 ? 'Trimming' : 'Resizing'
-    def compression = opts.compression ?: 'webp'
-    println "  $actionName images in ${sourceDirectory.fileName}"
-    def readFromDirectory = sourceDirectory
-    def trimDirectories = []
-    for (def i = 1; i < trimCount; ++i) {
-      println("    Extra trim $i")
-      def iteration = i-1
-      def trimDirectory = sourceDirectory.createSiblingDirectoryWithAppendix("trim-$i")
-      readFromDirectory.eachFile { sourcePath ->
-        def trimPath = trimDirectory.resolve(sourcePath.withExtension('webp').name)
-        println("      Trimming ${sourcePath.name}")
-        def command = convertCommand(source:sourcePath, target:trimPath, quality:'lossless')
-        //println("        $command")
-        execute(command)
-      }
-      trimDirectories += trimDirectory
-      readFromDirectory = trimDirectory
-    }
-    def targetDirectory = sourceDirectory.createSiblingDirectoryWithAppendix('trimmed')
-    println("    $actionName")
-    readFromDirectory.eachFile { sourcePath ->
-      def targetPath = targetDirectory.resolve("${fileNameWithoutExtension(sourcePath)}.$compression")
-      if (!Files.exists(targetPath)) {
-        println "      $actionName ${sourcePath.fileName}"
-        def command = convertCommand(source:sourcePath, target:targetPath, quality:94)
-        //println("        $command")
-        execute(command)
-      }
-    }
-    trimDirectories.each{it.deleteDir()}
-    targetDirectory
-  }
-
-  void writeCbz(Path target, Path sourceDirectory) {
-    println '  Compressing the CBZ'
-    assert Files.isDirectory(sourceDirectory)
-    def sourcePaths = Files.list(sourceDirectory).toList().toSorted()
-    def digits = sourcePaths.size().toString().length()
-    new ZipOutputStream(Files.newOutputStream(target)).withCloseable { zipOut ->
-      sourcePaths.eachWithIndex { sourcePath, index ->
-        def formattedIndex = String.format("%0${digits}d", index+1)
-        def entryOut = new ZipEntry("${formattedIndex}.${fileExtension(sourcePath)}")
-        zipOut.putNextEntry(entryOut)
-        Files.newInputStream(sourcePath).withCloseable { content ->
-          content.transferTo(zipOut)
-        }
-        zipOut.closeEntry()
-      }
-      zipOut.finish()
-    }
-  }
-}
-
-class ExitException extends Exception {
-  public ExitException(String message) {
-    super(message)
-  }
-}
-
-/** Creates a sibling directory with a dash-separated name appended */
-Path.metaClass.createDirectories = {Files.createDirectories(delegate)}
-Path.metaClass.createSiblingDirectoryWithAppendix = {appendix -> delegate.siblingWithAppendix(appendix).createDirectories()}
-Path.metaClass.exists = {Files.exists(delegate)}
-Path.metaClass.getExtension = {delegate.name[delegate.name.lastIndexOf('.')+1..-1]}
-Path.metaClass.getNameWithoutExtension = {delegate.name[0..delegate.name.lastIndexOf('.')-1]}
-Path.metaClass.withExtension = {extension -> delegate.toAbsolutePath().parent.resolve("${delegate.nameWithoutExtension}.$extension")}
-Path.metaClass.getName = {
-  def name = delegate.toString()
-  name[name.lastIndexOf('/')+1..-1]
-}
-Path.metaClass.readPosixFilePermissions = {Files.getPosixFilePermissions(delegate)}
-/** A sibling with a dash-separated name appended */
-Path.metaClass.siblingWithAppendix = {appendix -> delegate.parent.resolve("${delegate.fileName}-${appendix}")}
-Path.metaClass.writePosixFilePermissions = {permissions -> Files.setPosixFilePermissions(delegate, permissions)}
-
-try {
-  def parser = new CliBuilder(usage:'pdf-to-cbz').tap {
-    _ longOpt:'compression', args:1, defaultValue:'png', 'The type of image compression to use in the cbz'
-    _ longOpt:'delete', 'Delete the PDF file after conversion'
-    h(longOpt:'help', 'Show this message and exit')
-    _ longOpt:'trims', args:1, defaultValue:'2', 'number of trims to apply'
-  }
-  def options = parser.parse(args)
-  if (options.help) {
-    parser.usage()
-    System.exit(0)
-  }
-  new Converter().applyAll(Paths.get(''), compression:options.compression, delete:options.delete, trimCount:options.trims as Integer)
-} catch (ExitException e) {
-  println e.message
-  System.exit(1)
-}
+begin
+  options = Slop.parse do |o|
+    o.string '--compression', 'The type of image compression to use in the cbz', default:'png'
+    o.bool '--delete', 'Delete the PDF file after conversion'
+    o.integer '--trims', 'The number of trims to apply', default:2
+  end
+  convert_all(compression:options[:compression], delete:options[:delete], directory:Pathname.new('.'), trim_count:options[:trims])
+rescue ExitException => e
+  abort(e.message)
+end
 

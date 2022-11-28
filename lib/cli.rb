@@ -1,0 +1,3 @@
+class ExitException < StandardError
+end
+
