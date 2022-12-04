@@ -1,9 +1,10 @@
+require 'fileutils'
 require 'pathname'
 require 'zip'
 
 module PathnameFunctions
-  def absolute() = self.realpath
-  def basename_without_extension() = self.basename('.*')
+  def absolute = self.realpath
+  def basename_without_extension = self.basename('.*')
   def child(name) = self + name
 
   def children_with_extension(extension, exclude:[])
@@ -83,9 +84,24 @@ module PathnameFunctions
     self
   end
 
-  def make_directories() = FileUtils.mkdir_p(self)
+  def make_directories = FileUtils.mkdir_p(self)
+
+  def move(target) = FileUtils.mv(self, target)
+
+  def move_with_permissions(target)
+    target.copy_permissions_to(self)
+    move(target)
+    target
+  end
+
   def parent = self.dirname
   def sibling(name) = parent.child(name)
+  def sibling_with_appendix(appendix) =
+    if file?
+      sibling("#{basename_without_extension}#{appendix}#{extname}")
+    elsif directory?
+      sibling(basename + appendix)
+    end
   def with_extension(ext) = parent.child("#{basename_without_extension}.#{ext}")
 end
 Pathname.class_eval{include PathnameFunctions}
