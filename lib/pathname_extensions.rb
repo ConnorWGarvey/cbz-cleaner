@@ -4,7 +4,13 @@ require 'zip'
 
 module PathnameFunctions
   def absolute = self.realpath
-  def basename_without_extension = self.basename('.*')
+  def basename_without_extension = basename('.*')
+
+  def basename_without_trailing_slash
+    text = basename.to_s
+    text.end_with?('/') ? text[0..-2] : text
+  end
+
   def child(name) = self + name
 
   def children_with_extension(extension, exclude:[])
@@ -44,12 +50,16 @@ module PathnameFunctions
     user = nil # must be root to set user
     group = stat.gid # group number
     mode = stat.mode # integer
+    if directory?
+      # Remove executable bits
+      mode = mode.to_s.split('').map{|i|i.to_i}.map{|i|i.odd? ? i-1 : i}.join.to_i
+    end
     to.chmod(mode)
     to.chown(user, group)
   end
 
   def create_sibling_directory(name) = sibling(name).make_directory
-  def create_sibling_directory_with_appendix(appendix) = create_sibling_directory(basename + appendix)
+  def create_sibling_directory_with_appendix(appendix) = create_sibling_directory(basename_without_trailing_slash + appendix)
 
   def delete_directory
     FileUtils.rm_r(self) if exist?

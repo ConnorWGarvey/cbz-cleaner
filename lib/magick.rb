@@ -18,7 +18,7 @@ class Magick
     else
       []
     end
-    ['convert', '-alpha', 'flatten', source.absolute.to_s, '-fuzz', '7%', '-trim', '+repage', '-resize', '2700>x2700>', '+repage'] + compression_options + [target.to_s]
+    ['convert', '-alpha', 'flatten', source.absolute.to_s, '-deskew', '40%', '+repage', '-fuzz', '7%', '-trim', '+repage', '-resize', '2700>x2700>', '+repage'] + compression_options + [target.to_s]
   end
 end
 
