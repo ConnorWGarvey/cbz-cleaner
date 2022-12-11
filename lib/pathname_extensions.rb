@@ -51,8 +51,9 @@ module PathnameFunctions
     group = stat.gid # group number
     mode = stat.mode # integer
     if directory?
-      # Remove executable bits
-      mode = mode.to_s.split('').map{|i|i.to_i}.map{|i|i.odd? ? i-1 : i}.join.to_i
+      # Remove executable bits by masking 0111 (if a number has 1 added to it, it's executable)
+      # Mode numbers are octal. In Ruby, to make a number octal, prefix it by "0"
+      mode = mode ^ (mode & 0111)
     end
     to.chmod(mode)
     to.chown(user, group)
