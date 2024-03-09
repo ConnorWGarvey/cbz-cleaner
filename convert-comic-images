@@ -1,114 +1,83 @@
-#!/usr/bin/env groovy
+#!/usr/bin/env ruby
 
-import groovy.transform.ToString
-import java.nio.file.Files
-import java.nio.file.LinkOption
-import java.nio.file.Path
-import java.nio.file.Paths
-import java.nio.file.attribute.GroupPrincipal
-import java.nio.file.attribute.PosixFileAttributes
-import java.nio.file.attribute.PosixFileAttributeView
-import java.text.DecimalFormat
+require_relative 'lib/cli'
+require_relative 'lib/magick'
+require_relative 'lib/pathname_extensions'
+require 'set'
+require 'slop'
 
-class Combiner {
-  void apply(Map opts=[:], Path parentDirectory) {
-    def directories = parentDirectory.listSorted().findAll{it.isDirectory()}
-    if (directories.isEmpty()) return
-    convertAll(directory:parentDirectory, compression:opts.compression)
-  }
+def convert(compression:, delete:, directory:, trim_count:)
+  scaled = trim_all(compression:compression, directory:directory, suffix:'-untrimmed', trim_count:0)
+  directory.copy_permissions_to(scaled)
+  child = directory.first_child
+  scaled.children.each{|target|child.copy_permissions_to(target)} if (child)
+  trimmed = trim_all(compression:compression, directory:directory, suffix:'-trimmed', trim_count:trim_count)
+  trimmed.children.each{|target|child.copy_permissions_to(target)} if (child)
+  directory.delete_directory if delete
+end
 
-  void convert(Map opts) {
-    def sourceDirectory = opts.directory
-    clean(sourceDirectory)
-    println "  Converting $sourceDirectory.name"
-    def compression = opts.compression
-    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-$compression")
-    targetDirectory.createDirectories()
-    sourceDirectory.copyPermissionsTo(targetDirectory)
-    def aSourceFile = sourceDirectory.list()[0]
-    sourceDirectory.eachFile { sourcePath ->
-      def targetPath = targetDirectory.resolve("${sourcePath.nameWithoutExtension}.$compression")
-      if (!targetPath.exists()) {
-        println "    Trimming ${sourcePath.fileName} to $compression"
-        execute(['convert', '-fuzz', '7%', '-trim', sourcePath.toString(), targetPath.toString()])
-        aSourceFile.copyPermissionsTo(targetPath)
-      }
-    }
-    sourceDirectory.deleteDir()
-    targetDirectory.moveTo(sourceDirectory)
-  }
+def convert_all(compression:, delete:, directory:, trim_count:)
+  done = Set.new
+  #puts directory.child_directories(exclude:done).select{|p|!p.basename.to_s.end_with?('-trimmed') && !p.basename.to_s.end_with?('-untrimmed')}.map{|d|d.basename.to_s}.join("\n")
+  while child_directory = directory.child_directories(exclude:done).select{|p|!p.basename.to_s.end_with?('-trimmed') && !p.basename.to_s.end_with?('-untrimmed')}.first&.absolute
+    if child_directory.sibling_with_appendix('-trimmed').exist?
+      puts("Skipping existing #{child_directory.basename}")
+    else
+      puts("Converting #{child_directory.basename}")
+      convert(compression:compression, delete:delete, directory:child_directory, trim_count:trim_count)
+    end
+    done << child_directory
+  end
+end
 
-  void convertAll(Map opts) {
-    println 'Converting images'
-    opts.directory.listSorted().findAll{it.isDirectory()}.each { directory ->
-      convert(compression:opts.compression, directory:directory)
-    }
-  }
+def trim_all(compression:, directory:, trim_count:, suffix:)
+  source_directory = directory
+  action_name = trim_count > 0 ? 'Trimming' : 'Resizing'
+  puts("  #{action_name} images in #{directory.basename}")
+  read_from_directory = directory
+  trim_directories = []
+  begin
+    for i in 2..trim_count
+      puts("    Extra trim #{i}")
+      iteration = i-1
+      trim_directory = directory.create_sibling_directory_with_appendix("-trim-#{i}")
+      read_from_directory.each_file(exclude:['.nomedia']) do |source_path|
+        trim_path = trim_directory.child(source_path.with_extension('webp').basename)
+        puts("      Trimming #{source_path.basename} -> #{trim_path.extension}")
+        Magick.convert(quality: :lossless, source:source_path, target:trim_path)
+      end
+      trim_directories << trim_directory
+      read_from_directory = trim_directory
+    end
+    target_directory = source_directory.create_sibling_directory_with_appendix(suffix)
+    puts("    #{action_name}")
+    read_from_directory.each_file(exclude:['.nomedia']) do |source_path|
+      target_path = target_directory.child("#{source_path.basename_without_extension}.#{compression}")
+      if !target_path.exist?
+        puts("      #{action_name} #{source_path.basename} -> #{target_path.extension}")
+        operations = (trim_count>0) ? [:trim, :resize] : [:resize]
+        Magick.convert(operations:operations, quality:94, source:source_path, target:target_path)
+      end
+    end
+  ensure
+    trim_directories.each do |d|
+      begin
+        d.delete_directory
+      rescue
+      end
+    end
+  end
+  target_directory
+end
 
-  void clean(Path directory) {
-    def nomedia = directory.resolve('.nomedia')
-    if (nomedia.exists()) nomedia.delete()
-  }
-
-  void execute(List<String> command) {
-    def proc = command.execute()
-    def out = proc.in.text
-    def err = proc.err.text
-    proc.waitFor()
-    def exitValue = proc.exitValue()
-    if (exitValue != 0) {
-      throw new ExitException("$out\n\n$err")
-    }
-  }
-}
-
-class ExitException extends Exception {
-  public ExitException(String message) {
-    super(message)
-  }
-}
-
-BigDecimal.metaClass.zeroPad = {int amount -> new DecimalFormat("${'0'*amount}.######").format(delegate)}
-Integer.metaClass.zeroPad = {int amount -> String.format("%0${amount}d", delegate)}
-Path.metaClass.copyPermissionsTo = { Path to ->
-  GroupPrincipal group = Files.readAttributes(delegate, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group()
-  Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group)
-  to.writePosixFilePermissions(delegate.readPosixFilePermissions())
-}
-Path.metaClass.createDirectories = {Files.createDirectories(delegate)}
-Path.metaClass.delete = {Files.delete(delegate)}
-Path.metaClass.eachFileOrdered = {Closure closure -> delegate.listSorted().each{closure.call(it)}}
-Path.metaClass.eachFileOrderedWithIndex = {Closure closure ->
-  delegate.listSorted().eachWithIndex{item, index -> closure.call(item, index)}
-}
-Path.metaClass.exists = {Files.exists(delegate)}
-Path.metaClass.getExtension = {delegate.name[delegate.name.lastIndexOf('.')+1..-1]}
-Path.metaClass.getName = {
-  def name = delegate.toString()
-  name[name.lastIndexOf('/')+1..-1]
-}
-Path.metaClass.getNameWithoutExtension = {delegate.name[0..delegate.name.lastIndexOf('.')-1]}
-Path.metaClass.isDirectory = {Files.isDirectory(delegate)}
-Path.metaClass.list = {Files.list(delegate).toList()}
-Path.metaClass.listSorted = {delegate.list().toSorted()}
-Path.metaClass.moveTo = {Path destination -> Files.move(delegate, destination)}
-Path.metaClass.readPosixFilePermissions = {Files.getPosixFilePermissions(delegate)}
-Path.metaClass.renameTo = { String newName ->
-  def destination = delegate.parent.resolve(newName)
-  delegate.moveTo(destination)
-}
-Path.metaClass.writePosixFilePermissions = {permissions -> Files.setPosixFilePermissions(delegate, permissions)}
-String.metaClass.toBigDecimal = {delegate as BigDecimal}
-String.metaClass.toInt = {delegate as Integer}
-
-try {
-  def parser = new CliBuilder(usage:'convert-comic-images').tap {
-    _ longOpt:'compression', args:1, defaultValue:'png', 'image compression'
-  }
-  def options = parser.parse(args)
-  new Combiner().apply(Paths.get('').toAbsolutePath(), compression:options.compression)
-} catch (ExitException e) {
-  println e.message
-  System.exit(1)
-}
+begin
+  options = Slop.parse do |o|
+    o.string '--compression', 'The type of image compression to use', default:'png'
+    o.bool '--delete', 'Delete the source directory after conversion'
+    o.integer '--trims', 'The number of trims to apply', default:2
+  end
+  convert_all(compression:options[:compression], delete:options[:delete], directory:Pathname.new('.'), trim_count:options[:trims])
+rescue ExitException => e
+  abort(e.message)
+end
 

@@ -44,7 +44,7 @@ end
 
 options = Slop.parse do |o|
   o.bool '--delete', 'Delete the image directory after conversion'
-  o.integer '--quality', 'Compressed image quality', default:94
+  o.integer '--quality', 'Compressed image quality', default:93
   o.integer '--trim-fuzz-factor', 'When trimming edges, how eager to be', default:7
 end
 

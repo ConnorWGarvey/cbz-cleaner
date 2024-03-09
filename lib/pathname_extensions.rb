@@ -13,6 +13,10 @@ module PathnameFunctions
 
   def child(name) = self + name
 
+  def child_directories(exclude:[])
+    children.select{|c|c.directory? && !exclude.map{|e|e.absolute.to_s}.include?(c.absolute.to_s)}
+  end
+
   def children_with_extension(extension, exclude:[])
     children.select{|f|(f.extension == extension) && !exclude.map{|e|e.absolute.to_s}.include?(f.absolute.to_s)}
   end
@@ -26,7 +30,7 @@ module PathnameFunctions
     puts("  Compressing the #{target.extension.upcase}")
     namer = if naming == :incrementing
       digits = children.size.to_s.length
-      Proc.new{|n,i|"%0#{digits}d" % i}
+      Proc.new{|n,i|"%0#{digits}d" % (i+1)}
     elsif naming == :source
       Proc.new{|n|n}
     else
@@ -50,7 +54,7 @@ module PathnameFunctions
     user = nil # must be root to set user
     group = stat.gid # group number
     mode = stat.mode # integer
-    if directory?
+    if directory? && to.file?
       # Remove executable bits by masking 0111 (if a number has 1 added to it, it's executable)
       # Mode numbers are octal. In Ruby, to make a number octal, prefix it by "0"
       mode = mode ^ (mode & 0111)
@@ -74,11 +78,11 @@ module PathnameFunctions
     end
   end
 
-  def each_file
+  def each_file(exclude:[])
     i = -1
     each_child do |f|
       i += 1
-      yield(f, i) if f.file?
+      yield(f, i) if f.file? && !exclude.include?(f.basename.to_s)
     end
   end
 
@@ -89,6 +93,10 @@ module PathnameFunctions
   end
 
   def extension = extname[1..-1]
+
+  def first_child
+    children.size > 0 ? children[0] : nil
+  end
 
   def make_directory()
     Dir.mkdir(self)
@@ -107,11 +115,13 @@ module PathnameFunctions
 
   def parent = self.dirname
   def sibling(name) = parent.child(name)
-  def sibling_with_appendix(appendix) =
-    if file?
-      sibling("#{basename_without_extension}#{appendix}#{extname}")
-    elsif directory?
-      sibling(basename + appendix)
+  def sibling_with_appendix(suffix) =
+    if directory?
+      sibling(basename_without_trailing_slash + suffix)
+    elsif extname.empty?
+      sibling(basename + suffix)
+    else
+      sibling("#{basename_without_extension}#{suffix}#{extname}")
     end
   def with_extension(ext) = parent.child("#{basename_without_extension}.#{ext}")
 end

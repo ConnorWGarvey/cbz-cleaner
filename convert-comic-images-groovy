@@ -1,0 +1,114 @@
+#!/usr/bin/env groovy
+
+import groovy.transform.ToString
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.attribute.GroupPrincipal
+import java.nio.file.attribute.PosixFileAttributes
+import java.nio.file.attribute.PosixFileAttributeView
+import java.text.DecimalFormat
+
+class Combiner {
+  void apply(Map opts=[:], Path parentDirectory) {
+    def directories = parentDirectory.listSorted().findAll{it.isDirectory()}
+    if (directories.isEmpty()) return
+    convertAll(directory:parentDirectory, compression:opts.compression)
+  }
+
+  void convert(Map opts) {
+    def sourceDirectory = opts.directory
+    clean(sourceDirectory)
+    println "  Converting $sourceDirectory.name"
+    def compression = opts.compression
+    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-$compression")
+    targetDirectory.createDirectories()
+    sourceDirectory.copyPermissionsTo(targetDirectory)
+    def aSourceFile = sourceDirectory.list()[0]
+    sourceDirectory.eachFile { sourcePath ->
+      def targetPath = targetDirectory.resolve("${sourcePath.nameWithoutExtension}.$compression")
+      if (!targetPath.exists()) {
+        println "    Trimming ${sourcePath.fileName} to $compression"
+        execute(['convert', '-fuzz', '7%', '-trim', sourcePath.toString(), targetPath.toString()])
+        aSourceFile.copyPermissionsTo(targetPath)
+      }
+    }
+    sourceDirectory.deleteDir()
+    targetDirectory.moveTo(sourceDirectory)
+  }
+
+  void convertAll(Map opts) {
+    println 'Converting images'
+    opts.directory.listSorted().findAll{it.isDirectory()}.each { directory ->
+      convert(compression:opts.compression, directory:directory)
+    }
+  }
+
+  void clean(Path directory) {
+    def nomedia = directory.resolve('.nomedia')
+    if (nomedia.exists()) nomedia.delete()
+  }
+
+  void execute(List<String> command) {
+    def proc = command.execute()
+    def out = proc.in.text
+    def err = proc.err.text
+    proc.waitFor()
+    def exitValue = proc.exitValue()
+    if (exitValue != 0) {
+      throw new ExitException("$out\n\n$err")
+    }
+  }
+}
+
+class ExitException extends Exception {
+  public ExitException(String message) {
+    super(message)
+  }
+}
+
+BigDecimal.metaClass.zeroPad = {int amount -> new DecimalFormat("${'0'*amount}.######").format(delegate)}
+Integer.metaClass.zeroPad = {int amount -> String.format("%0${amount}d", delegate)}
+Path.metaClass.copyPermissionsTo = { Path to ->
+  GroupPrincipal group = Files.readAttributes(delegate, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group()
+  Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group)
+  to.writePosixFilePermissions(delegate.readPosixFilePermissions())
+}
+Path.metaClass.createDirectories = {Files.createDirectories(delegate)}
+Path.metaClass.delete = {Files.delete(delegate)}
+Path.metaClass.eachFileOrdered = {Closure closure -> delegate.listSorted().each{closure.call(it)}}
+Path.metaClass.eachFileOrderedWithIndex = {Closure closure ->
+  delegate.listSorted().eachWithIndex{item, index -> closure.call(item, index)}
+}
+Path.metaClass.exists = {Files.exists(delegate)}
+Path.metaClass.getExtension = {delegate.name[delegate.name.lastIndexOf('.')+1..-1]}
+Path.metaClass.getName = {
+  def name = delegate.toString()
+  name[name.lastIndexOf('/')+1..-1]
+}
+Path.metaClass.getNameWithoutExtension = {delegate.name[0..delegate.name.lastIndexOf('.')-1]}
+Path.metaClass.isDirectory = {Files.isDirectory(delegate)}
+Path.metaClass.list = {Files.list(delegate).toList()}
+Path.metaClass.listSorted = {delegate.list().toSorted()}
+Path.metaClass.moveTo = {Path destination -> Files.move(delegate, destination)}
+Path.metaClass.readPosixFilePermissions = {Files.getPosixFilePermissions(delegate)}
+Path.metaClass.renameTo = { String newName ->
+  def destination = delegate.parent.resolve(newName)
+  delegate.moveTo(destination)
+}
+Path.metaClass.writePosixFilePermissions = {permissions -> Files.setPosixFilePermissions(delegate, permissions)}
+String.metaClass.toBigDecimal = {delegate as BigDecimal}
+String.metaClass.toInt = {delegate as Integer}
+
+try {
+  def parser = new CliBuilder(usage:'convert-comic-images').tap {
+    _ longOpt:'compression', args:1, defaultValue:'png', 'image compression'
+  }
+  def options = parser.parse(args)
+  new Combiner().apply(Paths.get('').toAbsolutePath(), compression:options.compression)
+} catch (ExitException e) {
+  println e.message
+  System.exit(1)
+}
+
