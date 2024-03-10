@@ -43,7 +43,7 @@ class Combiner
           puts '  Collecting'
 					trimmed_directory.sorted_children.each_with_index do |file, file_index|
             target_file = volume.path + "#{(issue_index + 1).to_s.rjust(6, '0')}-#{(file_index + 1).to_s.rjust(6, '0')}.#{file.extension}"
-            puts "    Moving issue #{issue.number.to_s('F')}:#{file.basename.to_s} to #{target_file.basename.to_s}"
+            puts "    Moving issue #{issue.readable_number}:#{file.basename.to_s} to #{target_file.basename.to_s}"
 						FileUtils.mv(file, target_file)
             issue.path.copy_permissions_to(target_file)
 					end
@@ -73,7 +73,11 @@ class Issue
     else
       nil
     end
-  end 
+  end
+
+  def readable_number
+    @number.to_s('F').sub(/\.?0+$/, '')
+  end
 
   def to_s
     <<~TO_S
