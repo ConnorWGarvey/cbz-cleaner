@@ -18,8 +18,23 @@ Zip::Entry.class_eval do
   end
 
   def basename_without_extension = basename.substring_before_last('.')
+
+  # Copies the entry to a file identified by a Pathname
+  def copy_to_pathname(pathname)
+    if name_is_directory?
+      FileUtils.mkdir_p(pathname)
+    else
+      FileUtils.mkdir_p(pathname.dirname)
+      File.open(pathname, "wb"){|file|write_to(file)}
+    end
+  end
+  
+  def copy_to_directory(directory)
+    copy_to_pathname(directory.join(basename))
+  end
+
   def copy_to_zip(zip, name:) = name_is_directory? ? zip.mkdir(name) : zip.get_output_stream(name){|writer|write_to(writer)}
-  # Determines wheth the entry is or is in a garbage directory
+  # Determines whether the entry is or is in a garbage directory
   def in_garbage_directory? = any_ancestor?{|a|GARBAGE_DIRECTORIES.include?(a.substring_after_last('/'))}
 
   def write_to(writer)
@@ -114,6 +129,8 @@ Zip::File.instance_eval do
 
   def with_entries(path) = open(path){|zip|yield zip.entries}
 
+  def with_sorted_entries(path, exclude_extensions: []) = open(path){|zip|zip.sorted_entries(exclude_extensions: exclude_extensions).each{|e|yield e}}
+
   private
 
   # Opens a temp file for writing and an existing zip for reading, yields both, then replaces the source zip with the written temp file.
@@ -137,7 +154,7 @@ Zip::File.instance_eval do
 end
 
 Zip::File.class_eval do
-  def sorted_entries
+  def sorted_entries(exclude_extensions: [])
     # Every file ends with a dash or underscore, then a number
     if entries.all?{|e|!e.name_is_directory? && e.basename_without_extension.match?(/[_\-\#]\d+\Z/)}
       entries.
@@ -153,7 +170,7 @@ Zip::File.class_eval do
       entries.sort_by{|e|basename_without_extension.to_i}
     else
       entries.uniq{|e|e.name}.sort_by{|e|e.name}
-    end
+    end.select{|e|!exclude_extensions.include?(e.extension)}
   end
 
   def sorted_files

@@ -1,182 +1,136 @@
-#!/usr/bin/env groovy
+#!/usr/bin/env ruby
 
-import groovy.transform.ToString
-import java.nio.file.Files
-import java.nio.file.LinkOption
-import java.nio.file.Path
-import java.nio.file.Paths
-import java.nio.file.attribute.GroupPrincipal
-import java.nio.file.attribute.PosixFileAttributes
-import java.nio.file.attribute.PosixFileAttributeView
-import java.text.DecimalFormat
+require_relative 'lib/cli'
+require_relative 'lib/magick'
+require_relative 'lib/pathname_extensions'
+require_relative 'lib/shell'
+require_relative 'lib/zip_extensions'
+require 'bigdecimal'
+require 'fileutils'
+require 'pathname'
+require 'slop'
+require 'zip'
 
-class Combiner {
-  void apply(Map opts=[:], Path parentDirectory) {
-    def directories = parentDirectory.listSorted().findAll{it.isDirectory()}
-    if (directories.isEmpty()) return
-    def volumeList = directories.findAll{it.name.contains(' - Volume ')}.collect{Volume.parse(it)}.findAll{it}
-    volumeList.forEach { volume ->
-      if ((volume) == null) {
-        throw new ExitException("Error parsing volume ${directory.name}")
-      }
+# Combines images from multiple issues into a single volume
+# 1. Ensure issues have names matching the format "Series Name - 0001"
+# 2. Create directories for volumes with names in the format "Series Name - 0001-0012 - Volume 01"
+# 3. Run this application
+
+class Combiner
+  def apply(parent_directory:)
+    volumes = parent_directory.child_directories.map{|d|Volume.parse(d)}.compact
+    volumes.each do |volume|
+      if volume.path.children?
+        puts "Skipping #{volume.path.basename.to_s} because it already contains files"
+      else
+        puts "Combining #{volume.path.basename.to_s}"
+        issues = parent_directory.sorted_children_with_extension('cbz').map do |f|
+          match = f.basename.to_s.match(/(.*) - (\d{4}(?:\.\d+)?)/)
+          if match
+            name = match[1]
+            number = match[2]
+            Issue.new(number: BigDecimal(number), path: f, series: name)
+          else
+            false
+          end
+        end.select{|i|volume.series == i.series && volume.include_issue?(issue: i.number)}  
+        issues.each_with_index do |issue, issue_index|
+          extracted_directory = issue.path.create_sibling_directory_with_appendix("-extracted")
+          Zip::File.with_sorted_entries(issue.path, exclude_extensions: ['xml']) do |entry|
+            entry.copy_to_directory(extracted_directory)
+          end
+          trimmed_directory = Magick::trim_all(compression: 'png', directory: extracted_directory, trim_count: 2, suffix: '-trimmed')
+          puts '  Collecting'
+					trimmed_directory.sorted_children.each_with_index do |file, file_index|
+            target_file = volume.path + "#{(issue_index + 1).to_s.rjust(6, '0')}-#{(file_index + 1).to_s.rjust(6, '0')}.#{file.extension}"
+            puts "    Moving issue #{issue.number.to_s('F')}:#{file.basename.to_s} to #{target_file.basename.to_s}"
+						FileUtils.mv(file, target_file)
+            issue.path.copy_permissions_to(target_file)
+					end
+          extracted_directory.delete_directory
+          trimmed_directory.delete_directory
+        end
+      end
+    end
+  end
+end
+
+class Issue
+  attr_accessor :number, :path, :series
+
+  def initialize(number:, path:, series:)
+    @path = path
+    @number = number
+    @series = series
+  end
+
+  def self.parse(pathname)
+    match = pathname.basename.to_s.match(/(.*) - (\d{4}(?:\.\d+)?)/)
+    if match
+      series = match[1]
+      number = BigDecimal(match[2])
+      new(path: pathname, number: number, series: series)
+    else
+      nil
+    end
+  end 
+
+  def to_s
+    <<~TO_S
+    Issue: {
+      number: #{@number},
+      path: #{@path},
+      series: "#{@series}",
     }
-    def volumes = volumeList.groupBy{it.series}
-    println 'Moving images'
-    directories.findAll{!it.name.contains(' - Volume ') && it.hasFiles()}.each { directory ->
-      clean(directory)
-      def match = (directory.name =~ /(.*) - (\d{4}(?:\.\d+)?)$/)[0]
-      def series = match[1]
-      def issue = match[2] as BigDecimal
-      def volume = volumes[series].find{it.hasIssue(issue)}
-      if (volume == null) {
-        throw new ExitException("Couldn't find a volume for ${directory.name} : $series from $volumes")
-      }
-      println "  Moving $issue from $series"
-      renumber(directory:directory, issue:issue)
-      mergeDirectory(destination:volume.directory, source:directory)
+    TO_S
+  end
+end
+
+class Volume
+  attr_accessor :end_index, :number, :path, :series, :start_index
+
+  def self.parse(pathname)
+    match = pathname.basename.to_s.match(/(.*) - (\d{4}(?:\.\d+)?)-(\d{4}(?:\.\d+)?) - Volume (\d{2})/)
+    if match
+      series = match[1]
+      start_index = BigDecimal(match[2])
+      end_index = BigDecimal(match[3])
+      number = match[4].to_i
+      new(path: pathname, end_index: end_index, number: number, series: series, start_index: start_index)
+    else
+      nil
+    end
+  end 
+
+  def initialize(end_index:, number:, path:, series:, start_index:)
+    @path = path
+    @end_index = end_index
+    @number = number
+    @series = series
+    @start_index = start_index
+  end
+
+  def include_issue?(issue:)
+    issue >= start_index && issue <= end_index
+  end
+
+  def to_s
+    <<~TO_S
+    Volume: {
+      end_index: #{@end_index.to_s('F')},
+      number: #{@number},
+      path: #{@path},
+      series: "#{@series}",
+      start: #{@start_index.to_s('F')}
     }
-    convertAll(directory:parentDirectory, compression:opts.compression)
-  }
+    TO_S
+  end
+end
 
-  void convert(Map opts) {
-    def sourceDirectory = opts.directory
-    if (!sourceDirectory.hasFiles()) {
-      println "  Not converting $sourceDirectory.name because it does't contain any files"
-      return
-    }
-    println "  Converting $sourceDirectory.name"
-    def compression = opts.compression
-    def targetDirectory = sourceDirectory.parent.resolve("${sourceDirectory.fileName}-$compression")
-    targetDirectory.createDirectories()
-    sourceDirectory.copyPermissionsTo(targetDirectory)
-    def aSourceFile = sourceDirectory.list()[0]
-    def sourcePaths = Files.list(sourceDirectory).toList().toSorted()
-    def digits = sourcePaths.size().toString().length()
-    sourcePaths.eachWithIndex { sourcePath, index ->
-      def formattedIndex = String.format("%0${digits}d", index+1)
-      def targetFileName = "${formattedIndex}.$compression"
-      def targetPath = targetDirectory.resolve(targetFileName)
-      if (!targetPath.exists()) {
-        println "    Trimming ${sourcePath.fileName} to $targetFileName"
-        execute(['convert', '-fuzz', '7%', '-trim', sourcePath.toString(), targetPath.toString()])
-        aSourceFile.copyPermissionsTo(targetPath)
-      }
-    }
-    targetDirectory.eachFile{aSourceFile.copyPermissionsTo(it)}
-    sourceDirectory.deleteDir()
-    targetDirectory.moveTo(sourceDirectory)
-  }
+options = Slop.parse do |o|
+  o.bool '--compression', 'Type of image compression', default:'png'
+  o.integer '--trim-fuzz-factor', 'When trimming edges, how eager to be', default:7
+end
 
-  void convertAll(Map opts) {
-    println 'Converting images'
-    opts.directory.listSorted().findAll{it.isDirectory()}.each { directory ->
-      convert(compression:opts.compression, directory:directory)
-    }
-  }
-
-  void clean(Path directory) {
-    def nomedia = directory.resolve('.nomedia')
-    if (nomedia.exists()) nomedia.delete()
-  }
-
-  void execute(List<String> command) {
-    def proc = command.execute()
-    def out = proc.in.text
-    def err = proc.err.text
-    proc.waitFor()
-    def exitValue = proc.exitValue()
-    if (exitValue != 0) {
-      throw new ExitException("$out\n\n$err")
-    }
-  }
-
-  void mergeDirectory(Map opts) {
-    opts.source.eachFile { file ->
-      def target = opts.destination.resolve(file.name)
-      if (target.exists()) throw new ExitException("Can't create $file because it exists")
-      file.moveTo(target)
-    }
-    opts.source.delete()
-  }
-
-  void renumber(Map opts) {
-    def issue = opts.issue.zeroPad(6)
-    opts.directory.eachFileOrderedWithIndex { path, index ->
-      path.renameTo("${issue}-${(index+1).zeroPad(6)}.${path.extension}")
-    }
-  }
-}
-
-class ExitException extends Exception {
-  public ExitException(String message) {
-    super(message)
-  }
-}
-
-@ToString(includeNames=true) class Volume {
-  Path directory
-  BigDecimal end
-  int number
-  String series
-  BigDecimal start
-
-  boolean hasIssue(BigDecimal issue) {
-    issue >= start && issue <= end
-  }
-
-  static Volume parse(Path path) {
-    def match = path.name =~ /(.*) - (\d{4}(?:\.\d+)?)-(\d{4}(?:\.\d+)?) - Volume (\d{2})/
-    if (match.size() == 1) {
-      def group = match[0]
-      return new Volume(directory:path, end:group[3] as BigDecimal, number:group[4] as Integer, series:group[1], start:group[2] as BigDecimal)
-    } else return null
-  }
-}
-
-BigDecimal.metaClass.zeroPad = {int amount -> new DecimalFormat("${'0'*amount}.######").format(delegate)}
-Integer.metaClass.zeroPad = {int amount -> String.format("%0${amount}d", delegate)}
-Path.metaClass.copyPermissionsTo = { Path to ->
-  GroupPrincipal group = Files.readAttributes(delegate, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS).group();
-  Files.getFileAttributeView(to, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).setGroup(group);
-  to.writePosixFilePermissions(delegate.readPosixFilePermissions())
-}
-Path.metaClass.createDirectories = {Files.createDirectories(delegate)}
-Path.metaClass.delete = {Files.delete(delegate)}
-Path.metaClass.eachFileOrdered = {Closure closure -> delegate.listSorted().each{closure.call(it)}}
-Path.metaClass.eachFileOrderedWithIndex = {Closure closure ->
-  delegate.listSorted().eachWithIndex{item, index -> closure.call(item, index)}
-}
-Path.metaClass.exists = {Files.exists(delegate)}
-Path.metaClass.getExtension = {delegate.name[delegate.name.lastIndexOf('.')+1..-1]}
-Path.metaClass.getName = {
-  def name = delegate.toString()
-  name[name.lastIndexOf('/')+1..-1]
-}
-Path.metaClass.getNameWithoutExtension = {delegate.name[0..delegate.name.lastIndexOf('.')-1]}
-Path.metaClass.hasFiles = {delegate.list().any{it.isFile()}}
-Path.metaClass.isDirectory = {Files.isDirectory(delegate)}
-Path.metaClass.isFile = {Files.isRegularFile(delegate)}
-Path.metaClass.list = {Files.list(delegate).toList()}
-Path.metaClass.listFiles = {delegate.list().filter{it.isFile()}}
-Path.metaClass.listSorted = {delegate.list().toSorted()}
-Path.metaClass.moveTo = {Path destination -> Files.move(delegate, destination)}
-Path.metaClass.readPosixFilePermissions = {Files.getPosixFilePermissions(delegate)}
-Path.metaClass.renameTo = { String newName ->
-  def destination = delegate.parent.resolve(newName)
-  delegate.moveTo(destination)
-}
-Path.metaClass.writePosixFilePermissions = {permissions -> Files.setPosixFilePermissions(delegate, permissions)}
-String.metaClass.toBigDecimal = {delegate as BigDecimal}
-String.metaClass.toInt = {delegate as Integer}
-
-try {
-  def parser = new CliBuilder(usage:'combine-comic-volumes').tap {
-    _ longOpt:'compression', args:1, defaultValue:'png', 'image compression'
-  }
-  def options = parser.parse(args)
-  new Combiner().apply(Paths.get('').toAbsolutePath(), compression:options.compression)
-} catch (ExitException e) {
-  println e.message
-  System.exit(1)
-}
+Combiner.new.apply(parent_directory: Pathname.new('.'))
 

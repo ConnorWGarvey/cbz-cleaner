@@ -1,3 +1,4 @@
+require 'bigdecimal'
 require 'fileutils'
 require 'pathname'
 require 'zip'
@@ -16,6 +17,12 @@ module PathnameFunctions
   def child_directories(exclude:[])
     children.select{|c|c.directory? && !exclude.map{|e|e.absolute.to_s}.include?(c.absolute.to_s)}
   end
+
+  def child_files(exclude:[])
+    children.select{|c|c.file? && !exclude.map{|e|e.absolute.to_s}.include?(c.absolute.to_s)}
+  end
+
+  def children? = !children.empty?
 
   def children_with_extension(extension, exclude:[])
     children.select{|f|(f.extension == extension) && !exclude.map{|e|e.absolute.to_s}.include?(f.absolute.to_s)}
@@ -64,7 +71,14 @@ module PathnameFunctions
   end
 
   def create_sibling_directory(name) = sibling(name).make_directory
-  def create_sibling_directory_with_appendix(appendix) = create_sibling_directory(basename_without_trailing_slash + appendix)
+
+  def create_sibling_directory_with_appendix(appendix)
+    if file?
+      create_sibling_directory(dirname + "#{basename_without_extension.to_s}#{appendix}")
+    else
+      create_sibling_directory(basename_without_trailing_slash + appendix)
+    end
+  end
 
   def delete_directory
     FileUtils.rm_r(self) if exist?
@@ -124,6 +138,31 @@ module PathnameFunctions
       sibling("#{basename_without_extension}#{suffix}#{extname}")
     end
   def with_extension(ext) = parent.child("#{basename_without_extension}.#{ext}")
+
+  def sorted_children
+    # Every child that is a file ends with a dash or underscore, then a number
+    if child_files.all?{|e|e.basename_without_extension.to_s.match?(/[_\-\#] ?\d+(?:\.\d+)?\Z/)}
+      child_directories.sort +
+      child_files.
+        # Group by prefix
+      group_by{|e|e.basename_without_extension.to_s.match(/(.*)[_\-\#] ?\d+(?:\.\d+)?\Z/)[1]}.
+        # Sort each group by postfix
+      map{|prefix, grouped_entries|[prefix, grouped_entries.sort_by{|e|BigDecimal(e.basename_without_extension.to_s.match(/\d+(?:\.\d+)?\Z/)[0])}]}.to_h.
+        # Sort groups by prefix
+        sort.to_h.
+        values.
+        flatten
+    # Every child is a file with a name that's an integer
+    elsif children.all?{|c|!c.directory? && c.basename_without_extension.to_s.integer?}
+      children.sort_by{|c|basename_without_extension.to_i}
+    else
+      children.uniq{|c|c.to_s}.sort_by{|c|c.to_s}
+    end
+  end
+
+  def sorted_children_with_extension(extension, exclude:[])
+    sorted_children.select{|c|c.file?}.select{|f|(f.extension == extension) && !exclude.map{|e|e.absolute.to_s}.include?(f.absolute.to_s)}
+  end
 end
 Pathname.class_eval{include PathnameFunctions}
 
