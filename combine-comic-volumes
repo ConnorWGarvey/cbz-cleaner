@@ -28,7 +28,7 @@ class Combiner
       else
         puts "Combining #{volume.path.basename.to_s}"
         issues = parent_directory.sorted_children.select{|c|c.directory? || c.extension == 'cbz' || c.extension == 'zip'}.map do |f|
-          match = f.basename.to_s.match(/(.*) - (\d{4}(?:\.\d+)?)/)
+          match = f.basename.to_s.match(/(.*) - (\d{4}(?:\.\d+)?)$/)
           if match
             name = match[1]
             number = match[2]
@@ -42,9 +42,9 @@ class Combiner
               end
             Issue.new(number: BigDecimal(number), path: f, series: name, type: type)
           else
-            false
+            nil
           end
-        end.select{|i|volume.series == i.series && volume.include_issue?(issue: i.number)}  
+        end.select{|i|!i.nil? && volume.series == i.series && volume.include_issue?(issue: i.number)}  
         issues.each_with_index do |issue, issue_index|
           directories_to_clean = []
           extracted_directory =
