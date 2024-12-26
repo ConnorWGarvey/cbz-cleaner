@@ -18,37 +18,62 @@ require 'zip'
 
 class Combiner
   def apply(parent_directory:)
+    extensions_to_skip = Set.new(['xml'])
+    files_to_skip = Set.new(['.nomedia'])
+
     volumes = parent_directory.child_directories.map{|d|Volume.parse(d)}.compact
     volumes.each do |volume|
       if volume.path.children?
         puts "Skipping #{volume.path.basename.to_s} because it already contains files"
       else
         puts "Combining #{volume.path.basename.to_s}"
-        issues = parent_directory.sorted_children_with_extension('cbz').map do |f|
+        issues = parent_directory.sorted_children.select{|c|c.directory? || c.extension == 'cbz' || c.extension == 'zip'}.map do |f|
           match = f.basename.to_s.match(/(.*) - (\d{4}(?:\.\d+)?)/)
           if match
             name = match[1]
             number = match[2]
-            Issue.new(number: BigDecimal(number), path: f, series: name)
+            type =
+              if f.directory?
+                :directory
+              elsif f.extension == 'cbz' || f.extension == 'zip'
+                :zip
+              else
+                raise "Unknown type: #{pathname}"
+              end
+            Issue.new(number: BigDecimal(number), path: f, series: name, type: type)
           else
             false
           end
         end.select{|i|volume.series == i.series && volume.include_issue?(issue: i.number)}  
         issues.each_with_index do |issue, issue_index|
-          extracted_directory = issue.path.create_sibling_directory_with_appendix("-extracted")
-          Zip::File.with_sorted_entries(issue.path, exclude_extensions: ['xml']) do |entry|
-            entry.copy_to_directory(extracted_directory)
-          end
-          trimmed_directory = Magick::trim_all(compression: 'png', directory: extracted_directory, trim_count: 2, suffix: '-trimmed')
+          directories_to_clean = []
+          extracted_directory =
+            if issue.type == :zip
+              extracted_dir = issue.path.create_sibling_directory_with_appendix("-extracted")
+              Zip::File.with_sorted_entries(issue.path, exclude_extensions: ['xml']) do |entry|
+                entry.copy_to_directory(extracted_directory)
+              end
+              directories_to_clean << extracted_dir
+              extracted_dir
+            elsif issue.type == :directory
+              issue.path
+            else
+              raise "Unsupported type: #{issue.type}"
+            end
           puts '  Collecting'
-					trimmed_directory.sorted_children.each_with_index do |file, file_index|
-            target_file = volume.path + "#{(issue_index + 1).to_s.rjust(6, '0')}-#{(file_index + 1).to_s.rjust(6, '0')}.#{file.extension}"
-            puts "    Moving issue #{issue.readable_number}:#{file.basename.to_s} to #{target_file.basename.to_s}"
-						FileUtils.mv(file, target_file)
-            issue.path.copy_permissions_to(target_file)
-					end
-          extracted_directory.delete_directory
-          trimmed_directory.delete_directory
+	  extracted_directory.sorted_children.each_with_index do |file, file_index|
+            if (!files_to_skip.include?(file.basename.to_s)) && (!extensions_to_skip.include?(file.extension))
+              target_file = volume.path + "#{(issue_index + 1).to_s.rjust(6, '0')}-#{(file_index + 1).to_s.rjust(6, '0')}.#{file.extension}"
+              if issue.type == :directory
+                puts "    Copying issue #{issue.readable_number}:#{file.basename.to_s} to #{target_file.basename.to_s}"
+                file.copy_with_permissions(target_file)
+              else
+                puts "    Moving issue #{issue.readable_number}:#{file.basename.to_s} to #{target_file.basename.to_s}"
+                file.move_with_permissions(target_file)
+              end
+            end
+	  end
+          directories_to_clean.each{|d|d.delete_directory}
         end
       end
     end
@@ -56,12 +81,13 @@ class Combiner
 end
 
 class Issue
-  attr_accessor :number, :path, :series
+  attr_accessor :number, :path, :series, :type
 
-  def initialize(number:, path:, series:)
+  def initialize(number:, path:, series:, type:)
     @path = path
     @number = number
     @series = series
+    @type = type
   end
 
   def self.parse(pathname)
@@ -69,7 +95,15 @@ class Issue
     if match
       series = match[1]
       number = BigDecimal(match[2])
-      new(path: pathname, number: number, series: series)
+      type =
+        if pathname.directory?
+          :directory
+        elsif pathname.extension == 'cbz' || pathname.extension == 'zip'
+          :zip
+        else
+          raise "Unknown type: #{pathname}"
+        end
+      new(path: pathname, number: number, series: series, type: type)
     else
       nil
     end
@@ -85,6 +119,7 @@ class Issue
       number: #{@number},
       path: #{@path},
       series: "#{@series}",
+      type: "#{@type}",
     }
     TO_S
   end

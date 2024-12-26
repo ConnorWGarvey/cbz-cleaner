@@ -28,6 +28,10 @@ module PathnameFunctions
     children.select{|f|(f.extension == extension) && !exclude.map{|e|e.absolute.to_s}.include?(f.absolute.to_s)}
   end
 
+  def copy(target)
+    FileUtils.cp(self, target)
+  end
+
   # Copies the contents of a directory to a zip file. Currently not recursive, doesn't copy subdirectories.
   # @param target the target zip file
   # @param naming (optional) :source is default
@@ -68,6 +72,12 @@ module PathnameFunctions
     end
     to.chmod(mode)
     to.chown(user, group)
+  end
+
+  def copy_with_permissions(target)
+    copy(target)
+    self.copy_permissions_to(target)
+    target
   end
 
   def create_sibling_directory(name) = sibling(name).make_directory
