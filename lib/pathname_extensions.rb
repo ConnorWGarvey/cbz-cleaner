@@ -18,8 +18,8 @@ module PathnameFunctions
     children.select{|c|c.directory? && !exclude.map{|e|e.absolute.to_s}.include?(c.absolute.to_s)}
   end
 
-  def child_files(exclude:[])
-    children.select{|c|c.file? && !exclude.map{|e|e.absolute.to_s}.include?(c.absolute.to_s)}
+  def child_files(exclude:[], select_extensions:nil)
+    children.select{|c|c.file? && !exclude.map{|e|e.absolute.to_s}.include?(c.absolute.to_s) && (select_extensions.nil? || select_extensions.include?(c.extension))}
   end
 
   def children? = !children.empty?
@@ -92,11 +92,11 @@ module PathnameFunctions
     end
   end
 
-  def each_file(exclude:[])
+  def each_file(exclude:[], exclude_extensions:[])
     i = -1
     each_child do |f|
       i += 1
-      yield(f, i) if f.file? && !exclude.include?(f.basename.to_s)
+      yield(f, i) if f.file? && !exclude.include?(f.basename.to_s) && !exclude_extensions.include?(f.extension)
     end
   end
 

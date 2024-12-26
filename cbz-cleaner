@@ -13,9 +13,8 @@ require 'zip'
 ARCHIVE_EXTENSIONS = Set['cbz']
 
 def repackage_all(directory)
-  directory.children.each do |file|
+  directory.child_files(select_extensions:ARCHIVE_EXTENSIONS).each do |file|
     extension = file.extension
-    return unless file.file? && ARCHIVE_EXTENSIONS.include?(file.extension)
     puts(file.to_s)
     if Zip::File.garbage_directories?(file)
       puts('  Cleaning garbage directories')

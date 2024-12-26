@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 
 require_relative 'lib/cli'
+require_relative 'lib/magick'
 require_relative 'lib/pathname_extensions'
 require_relative 'lib/shell'
 require 'fileutils'
@@ -33,7 +34,8 @@ def trim_all(directory:, quality:, trim_fuzz_factor:)
     if !target_path.exist?
       puts "    Trimming #{source_path.basename}"
       begin
-        Shell.run(['convert', '-fuzz', "#{trim_fuzz_factor}%", '-trim', '+repage', '-resize', '2700>x2700>', '-quality', quality.to_s, source_path.to_s, target_path.to_s])
+        Magick.convert(quality:quality, source:source_path, target:target_path)
+        #Shell.run(['convert', '-fuzz', "#{trim_fuzz_factor}%", '-trim', '+repage', '-resize', '2700>x2700>', '-quality', quality.to_s, source_path.to_s, target_path.to_s])
       rescue ShellError => e
         raise ExitException(e.message)
       end

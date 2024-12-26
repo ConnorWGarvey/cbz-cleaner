@@ -12,6 +12,7 @@ def convert(compression:, delete:, directory:, trim_count:)
   child = directory.first_child
   scaled.children.each{|target|child.copy_permissions_to(target)} if (child)
   trimmed = trim_all(compression:compression, directory:directory, suffix:'-trimmed', trim_count:trim_count)
+  directory.copy_permissions_to(trimmed)
   trimmed.children.each{|target|child.copy_permissions_to(target)} if (child)
   directory.delete_directory if delete
 end
@@ -41,7 +42,7 @@ def trim_all(compression:, directory:, trim_count:, suffix:)
       puts("    Extra trim #{i}")
       iteration = i-1
       trim_directory = directory.create_sibling_directory_with_appendix("-trim-#{i}")
-      read_from_directory.each_file(exclude:['.nomedia']) do |source_path|
+      read_from_directory.each_file(exclude:['.nomedia'], exclude_extensions:['xml']) do |source_path|
         trim_path = trim_directory.child(source_path.with_extension('webp').basename)
         puts("      Trimming #{source_path.basename} -> #{trim_path.extension}")
         Magick.convert(quality: :lossless, source:source_path, target:trim_path)
@@ -51,7 +52,7 @@ def trim_all(compression:, directory:, trim_count:, suffix:)
     end
     target_directory = source_directory.create_sibling_directory_with_appendix(suffix)
     puts("    #{action_name}")
-    read_from_directory.each_file(exclude:['.nomedia']) do |source_path|
+    read_from_directory.each_file(exclude:['.nomedia'], exclude_extensions:['xml']) do |source_path|
       target_path = target_directory.child("#{source_path.basename_without_extension}.#{compression}")
       if !target_path.exist?
         puts("      #{action_name} #{source_path.basename} -> #{target_path.extension}")

@@ -15,6 +15,8 @@ class Magick
       else
         ['-quality', "#{quality}%"]
       end
+    elsif target.extension == 'avif'
+      ['-quality', "#{quality}%"]
     else
       []
     end
